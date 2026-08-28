@@ -417,7 +417,8 @@ flowchart TB
     core1 -.->|CAPTURE PATH<br/>read-only change logs| cdc1
     cdc1 -.->|domain events| az1
 
-    dc1 -.->|synchronous for transfer state, RPO 0<br/>asynchronous for bulk| dc2
+    az1 -.->|transfer state<br/>synchronous, RPO 0| az2
+    core1 -.->|bulk<br/>asynchronous| cz2
 
     classDef external fill:#6e6e6e,stroke:#4a4a4a,color:#fff
     classDef svc fill:#1168bd,stroke:#0b4884,color:#fff
