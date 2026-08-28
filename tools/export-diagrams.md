@@ -3,17 +3,20 @@
 The design is authored as Markdown with Mermaid diagrams. The submission is a **single Word
 file with the diagrams embedded**. This directory holds the build that turns one into the other.
 
-## One command
+## Two commands
 
 ```bash
-cd tools && npm install     # first time only
-cd .. && node tools/build-submission.mjs
+cd tools && npm install                  # first time only
+cd .. && node tools/build-submission.mjs # renders diagrams, builds the document
+powershell -ExecutionPolicy Bypass -File tools/to-docx.ps1
 ```
 
-Output: `build/NeoBank-HLD-Sunny-Dubey.doc`
+Output: `build/NeoBank-HLD-Sunny-Dubey.docx` — the file to submit.
 
-Open that file in Microsoft Word and use **Save As → Word Document (.docx)**. That is the file
-to submit. Word keeps every embedded image, so the result is one self-contained document.
+The second step drives Microsoft Word through COM to perform the conversion, so the result is
+byte-for-byte what opening the file and choosing **Save As → Word Document** would produce.
+Word must be installed; if it is not, open `build/NeoBank-HLD-Sunny-Dubey.doc` manually and use
+Save As instead. Either way the output is one self-contained file with every diagram embedded.
 
 ## What the build does
 

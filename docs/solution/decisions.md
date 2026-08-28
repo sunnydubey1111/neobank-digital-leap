@@ -12,17 +12,18 @@ A-) are defined there.
 | [D1](#d1--architecture-documented-as-versioned-text) | Architecture documented as versioned text | Accepted |
 | [D2](#d2--service-decomposition-and-integration-style) | Service decomposition and integration style | Accepted |
 | [D3](#d3--mainframe-integration-strategy) | Mainframe integration strategy | Accepted |
-| [D4](#d4--mainframe-data-ingestion-approach) | Mainframe data ingestion approach | Accepted |
+| [D4](#d4--source-system-data-ingestion-approach) | Source-system data ingestion approach | Accepted |
 | [D5](#d5--serving-fast-low-cost-reads) | Serving fast, low-cost reads | Accepted |
 | [D6](#d6--cloud-platform-and-region-strategy) | Cloud platform and region strategy | Accepted |
 | [D7](#d7--fraud-detection-architecture) | Fraud detection architecture | Accepted |
 | [D8](#d8--event-backbone-technology) | Event backbone technology | Accepted |
-| [D9](#d9--tiered-availability-targets) | Tiered availability targets | Accepted |
+| [D9](#d9--meeting-99999-with-a-core-dependent-write-path) | Meeting 99.999% with a core-dependent write path | Accepted |
 | [D10](#d10--gdpr-erasure-against-a-legally-immutable-ledger) | GDPR erasure against a legally immutable ledger | Accepted, pending legal confirmation |
 | [D11](#d11--read-model-storage-engine) | Read model storage engine | Accepted |
 | [D12](#d12--workload-placement-on-premises-versus-cloud) | Workload placement, on-premises versus cloud | Accepted |
 | [D13](#d13--not-sharding-the-read-model) | Not sharding the read model | Accepted |
 | [D14](#d14--customer-identity-and-consent) | Customer identity and consent | Accepted |
+| [D15](#d15--disaster-recovery-posture) | Disaster recovery posture | Accepted — differs from the brief vision |
 
 ---
 
@@ -84,7 +85,7 @@ consistent by construction — which D5 turns from a cost into the central benef
 
 **Context.** The core is COBOL on z/OS with DB2 and ADABAS. It provides exactly the guarantees a
 bank is legally obliged to provide — strong consistency, an accurate ledger, full audit trails,
-five-nines reliability — and it charges for every operation. There are 5 COBOL developers and 12
+five-nines reliability, and it charges for every operation. There are 5 COBOL developers and 12
 months. This is the decision every other decision depends on.
 
 **Options.**
@@ -103,24 +104,29 @@ described in HLD §3.4.3 — and absorbs COBOL, DB2, ADABAS, CICS and MQ entirel
 direction is preserved: because every consumer already talks to the ACL's contract rather than
 to the core, function can later be moved behind that contract without any consumer changing.
 
-**Consequences.** The write path inherits the core's latency and availability, which is why
-availability had to be tiered by path (D9) and why the transfer latency budget allocates 250 ms
+**Consequences.** The write path inherits the core's latency, and transfer *execution* inherits
+the core as a serial availability dependency (D9); the transfer latency budget allocates 250 ms
 to the commit (§3.8.3). Mainframe capacity becomes a hard throughput ceiling, so the write path
 is throttled rather than scaled (§3.8.4). The ACL becomes both a single point of failure and the
-programme's critical path with only five COBOL developers — the most serious schedule risk in
+programme's critical path with only five COBOL developers: the most serious schedule risk in
 the plan (R-02), mitigated by freezing its contract in month 2 and publishing mocks so the other
 55 developers are never blocked. In exchange, the bank never gambles its ledger, and one team
 absorbs all the legacy complexity instead of every team carrying a share of it.
 
 ---
 
-## D4 — Mainframe data ingestion approach
+## D4 — Source-system data ingestion approach
 
-**Related:** NFR-080, NFR-090, NFR-180, NFR-200, A-02, A-03.
+**Related:** NFR-080, NFR-090, NFR-180, NFR-200, A-02, A-03, A-17, A-18.
 
 **Context.** If reads are to be served without touching the mainframe (D5), something must
-continuously supply current data to whatever does serve them. How that data leaves the core
+continuously supply current data to whatever does serve them. How that data leaves each source
 determines both freshness and cost.
+
+There are **three** sources, not two. The target vision shows DB2 and ADABAS on the mainframe
+and a **SQL Server** estate beside them, in both the production and disaster recovery sites.
+Only the two mainframe sources carry a per-operation charge, so cost pressure applies unevenly
+across them, but the ingestion contract must be uniform regardless.
 
 **Options.**
 
@@ -131,23 +137,37 @@ determines both freshness and cost.
 | Scheduled delta extract | Minutes to hours | Low | Workable fallback; too coarse for the money path |
 | **Log-based change data capture** | Seconds | Near zero — reads the recovery log, not the database | Adds no per-query cost, preserves commit order, and is a standard DB2 capability |
 
-**Decision.** Log-based change data capture on DB2, publishing every committed change to the
-event backbone as domain events. For ADABAS, event replication where the installation supports
-it, with a scheduled delta extract as the designed fallback. Both producers run on-premises;
-the cloud consumes a mirror of the log and never reaches back for data.
+**Decision.** Log-based change data capture as the default for every source that supports it —
+DB2 from the recovery log, SQL Server from its native transaction-log capture — publishing
+committed changes to the event backbone as canonical domain events. For ADABAS, event
+replication where the installation supports it, with a scheduled delta extract as the designed
+fallback. All three producers run on-premises; the cloud consumes a mirror of the log and never
+reaches back for data.
+
+The ingestion tier is **source-agnostic by design**: every producer emits the same event
+contract (§3.4.4), so adding, replacing or re-scoping a source changes which events exist, not
+how ordering, idempotency, replay or projection work. The design can therefore carry
+SQL Server as a first-class source while the brief leaves its contents unspecified (A-18).
 
 Ordering is guaranteed per account by partitioning on the account identifier. Delivery is
-at-least-once and projection is idempotent by `(account, sequence_number)` — the achievable
+at-least-once and projection is idempotent by `(account, sequence_number)`: the achievable
 combination, and the one that makes replay safe.
 
 **Consequences.** The read path becomes eventually consistent, bounded at p95 ≤ 5 s (NFR-180),
 which the 24-hour allowance (NFR-080) comfortably accommodates for externally originated
 activity — and which the write-through in D5 removes entirely for a customer's own actions.
 A 30-day replayable log means any derived store can be rebuilt from zero without a single
-mainframe operation, which is what makes the read model safe to treat as disposable. The
+mainframe operation, so the read model is safe to treat as disposable. The
 ADABAS half is the weak point: near-real-time capture is unconfirmed (A-03), so the design
-deliberately places no money-path decision on customer-master freshness, and the question is
+places no money-path decision on customer-master freshness, and the question is
 resolved by a spike in phase 0 rather than assumed (OI-03).
+
+The SQL Server source is carried on an explicit assumption rather than an invention. The brief
+names it without saying what it holds, so the design assumes non-ledger data (A-18) and records
+the question as [OI-10]. The one outcome that would matter architecturally is its holding
+authoritative money data, in which case it becomes a second system of record under P1 and joins
+the write path; the source-agnostic contract above means the ingestion design itself is
+unaffected either way.
 
 ---
 
@@ -174,16 +194,20 @@ the event log (D4). The read model *is* the 360° single source the brief asks f
 place accounts, balances, transactions and categorised spend are assembled, rather than being
 stitched together per request.
 
-The read-your-writes problem is solved deliberately rather than tolerated: when the Orchestrator
+The read-your-writes problem is solved rather than tolerated: when the Orchestrator
 receives a confirmed CBS commit it writes the authoritative post-state straight into the read
 cache before responding (§3.3.2). The customer's own action is visible immediately; the CDC
 event that follows seconds later is applied idempotently and merely confirms it.
 
-**Consequences.** This removes 93% of the mainframe operations the digital channel would
-otherwise consume — roughly $3.24M per year at year-three volume, and the dominant cost lever
-in the programme across the entire plausible range of mainframe unit costs (§3.9.6). It is also
-what makes NFR-010 achievable: because the read path has no dependency on the core, it can be
-designed for five nines even though the core-dependent write path cannot (D9).
+**Consequences.** This removes **93% of the mainframe operations** the digital channel would
+otherwise consume: 290M/month to 20M/month at Year-3 volume (HLD §3.9.6). This is an
+architectural result, independent of pricing. Its financial value is material but cannot be
+stated as fact, because the brief supplies no per-operation rate; HLD §3.9.7 models it under an
+explicit assumption and shows the conclusion holds across a tenfold range.
+
+The decision earns its place even if that rate is unknowable. It is what makes NFR-011
+achievable — with no dependency on the core, queries can be engineered to 99.999% (D9) — and it
+removes the mainframe as a throughput ceiling on customer growth.
 
 The accepted costs are real. The read model is eventually consistent for activity the customer
 did not initiate (L-01), which is why every read response carries `as_of` and
@@ -235,7 +259,7 @@ multi-region would multiply cost and create exactly the data-residency exposure 
 
 ## D7 — Fraud detection architecture
 
-**Related:** FR-100, FR-110, FR-120, FR-130, NFR-140, NFR-150.
+**Related:** FR-100, FR-110, FR-120, FR-125, FR-130, NFR-140, NFR-150.
 
 **Context.** Two modes are required: real-time on the transfer path, and offline with more data
 and more processing time. On detection the transaction is cancelled and the customer informed.
@@ -264,9 +288,18 @@ wide-area round trip inside an 80 ms budget is not affordable.
 and cross-account patterns with models too expensive to run inline. It produces verdicts minutes
 to hours after posting.
 
-Cancellation after posting is effected by a **compensating CBS transaction** referencing the
-original (P4). The ledger is append-only; a posted entry is never edited. Above a value threshold
-an analyst approves; below it, cancellation is automatic.
+**The two cancellation cases are different mechanisms, and the distinction matters.**
+
+| | Detected by | When | Cancellation mechanism | Ledger effect |
+|---|---|---|---|---|
+| **Primary — pre-posting** (FR-120) | Real-time scorer | Before the CBS transaction is submitted | The transfer is **rejected**. No CBS transaction is ever submitted | **None.** Nothing posts, nothing is reversed |
+| **Exception — post-posting** (FR-125) | Offline pipeline | Minutes to hours after posting | A **compensating** CBS transaction referencing the original (P4) | Two entries: the original and its reversal, both permanent |
+
+The first is the normal path and the one the brief describes: fraud is caught on the synchronous
+transfer path and the transaction is cancelled before any money moves. Compensation exists only
+for what the real-time budget cannot catch. The ledger is append-only, so a posted entry is
+never edited; above a value threshold an analyst approves the reversal, below it cancellation is
+automatic. In both cases the customer is notified in the application (FR-130).
 
 **Consequences.** Both requirements are met without compromising either. The customer sees both
 the original posting and its reversal (L-06) — a direct and unavoidable consequence of an
@@ -311,36 +344,65 @@ consumer may assume it.
 
 ---
 
-## D9 — Tiered availability targets
+## D9 — Meeting 99.999% with a core-dependent write path
 
-**Related:** NFR-010, NFR-020, NFR-030, C-08, D3, D5.
+**Related:** NFR-010, NFR-011, NFR-012, NFR-020, NFR-021, NFR-025, NFR-030, C-01, C-08, OI-13,
+D3, D5.
 
-**Context.** The brief demands 99.999% uptime — 5.3 minutes per year. Money movement must be a
-CBS transaction (C-01), so the write path's availability can never exceed the mainframe's, and
-the mainframe is not under this programme's control. Publishing a single blended five-nines
-figure for the whole platform would be a commitment the architecture cannot honour.
+**Context.** The requirement is 99.999% uptime — 5.3 minutes a year. The brief does not say what
+is being measured, and that omission is the whole difficulty. Three facts bound the answer. The
+brief gives the existing Core Banking System as 99.999% reliable, so the core is not a weak link
+to be apologised for. Every money movement must be a CBS transaction (C-01), so posting depends
+on the core being up. And two 99.999% components in series give 0.99998 under an independence
+assumption — roughly 10.5 minutes a year rather than 5.3.
 
-**Options.** Commit 99.999% platform-wide and hope · quietly measure only the read path and
-report that number · **state availability per path and be explicit about which is which.**
+So the question is not whether to commit to 99.999%. It is what the figure is measured over, and
+what to do about the fact that nobody has said.
 
-**Decision.** Availability is tiered and each tier is stated separately:
+**Options.**
 
-| Path | Target | Why it is achievable |
-|------|--------|----------------------|
-| Read — balance, transactions, reports, Open Banking | **99.999%** | Multi-AZ cloud services with no dependency on the core; a total mainframe outage does not stop a customer seeing their balance |
-| Write — submission accepted and durably recorded | **99.99%** | Depends on the on-premises Orchestrator and its synchronous cross-site replication, not on the core |
-| Write — posted to the ledger | **99.9%**, degrading to store-and-forward | Bounded by the mainframe |
+| Option | Assessment |
+|--------|-----------|
+| Commit 99.999% end to end including ledger posting | Not achievable in series against a 99.999% dependency. A promise the design cannot keep. Rejected |
+| Commit a lower single figure such as 99.9% | Contradicts an explicit requirement, and understates what the architecture delivers by a factor of fifty — 525 minutes a year against a composed 10.5. Rejected as both non-compliant and inaccurate |
+| Redefine a queued transfer as complete so the headline reads 99.999% | Satisfies the requirement on paper by misrepresenting the service. A customer whose money has not moved does not have a completed transaction. **Rejected — this is the convenient answer and it is dishonest** |
+| Pick the favourable interpretation and stay quiet about the other | Passes review until someone asks the obvious question. Rejected |
+| **Define the candidate indicators, commit against the platform, publish the composed figure for completion, and raise the boundary as an open issue** | Meets the requirement on a stated scope, discloses what it does not cover, and puts the ambiguity where it belongs |
 
-Store-and-forward is what makes the middle row meaningful: during a core outage, transfers are
-accepted, durably recorded and shown to the customer as pending (FR-090), then drained when the
-core returns.
+**Decision.** Availability is committed against four named indicators rather than one number
+(HLD §2.2.1). SLI-1 digital channel, SLI-2 read service and SLI-3 transfer-request acceptance
+together constitute the **NeoBank Digital Platform: the system this document designs — and are
+committed at 99.999%** (NFR-010). SLI-4, CBS-backed completion, additionally depends on the core
+and composes to **99.998%** (NFR-020).
 
-**Consequences.** This is the honest answer, and it is a better one — the read path genuinely
-achieves five nines precisely because D5 removed its dependency on the core, so the CQRS decision
-pays for itself twice. It does require an explicit conversation with the business, since the
-headline number is not a single figure (R-04). Raising posted-transfer availability further is a
-mainframe investment decision, not a platform one, and the architecture should not obscure that
-by averaging it away.
+Each is measured and reported separately (NFR-025). No blended figure is published, because a
+blended figure would let core downtime hide inside a platform number.
+
+**Two things this decision does not do.**
+
+It does not claim SLI-4 meets the requirement. If the intended indicator turns out to be
+completed money movement, the design is **0.001% short**, and §2.2.1 says so in those words.
+Closing that gap means investing in the mainframe, not rearchitecting the platform.
+
+It does not treat the multiplication as proof. Two vendor availability figures multiplied
+together are a planning estimate: they assume independent failure domains, and the platform and
+core share a data centre, a network and an operations team. Correlated failure is real and
+unquantified here. The figure sizes the expectation and identifies the dominant dependency; only
+measurement over time establishes what is actually delivered.
+
+**A queued transfer is not a completed transaction.** Store-and-forward keeps *acceptance*
+available when the core is not. It does not move money, and nothing in this design represents it
+as having done so: the transfer sits in `ACCEPTED (pending)`, changes no balance, appears in no
+statement, and is shown to the customer as pending until it posts. Every financial transaction
+still executes as a CBS transaction (P1); store-and-forward defers that execution rather than
+replacing it.
+
+**Consequences.** The requirement is met on a scope that is stated rather than assumed, and the
+shortfall against the stricter reading is disclosed rather than absorbed. The cost is that the
+business must engage with a four-line availability statement instead of one number, and must
+settle the measurement boundary (OI-13, R-04). Store-and-forward also introduces a
+customer-visible pending state the application has to present honestly, which FR-090 requires
+anyway and which is better than either refusing the transfer or misreporting it.
 
 ---
 
@@ -350,7 +412,7 @@ by averaging it away.
 
 **Context.** A customer may demand erasure of all their data. Financial records carry a statutory
 retention period measured in years, so the ledger entries cannot lawfully be deleted. The same
-personal data has also been deliberately copied into the read model, cache, event log, analytics
+personal data has also been copied, by design, into the read model, cache, event log, analytics
 lake, advisor digest, and every backup and archive of those. Two legal obligations point in
 opposite directions, and a design that ignores either one is not deliverable.
 
@@ -362,7 +424,7 @@ opposite directions, and a design that ignores either one is not deliverable.
 | Retain everything and rely on a legal exemption | Not defensible for derived marketing- and analytics-grade copies that carry no retention obligation of their own. Rejected |
 | **Tokenise personal data and crypto-shred on erasure** | Reaches every copy simultaneously, including offline media, and preserves the statutory financial record |
 
-**Decision.** Personal data lives in exactly one place — the on-premises PII Vault — and travels
+**Decision.** Personal data lives in exactly one place: the on-premises PII Vault — and travels
 everywhere else only as an opaque `customer_token` (P5). Each customer's personal data is
 encrypted under a per-customer data encryption key held in the vault, backed by a hardware
 security module. On erasure the vault record is deleted and **that key is destroyed**. Every
@@ -377,7 +439,7 @@ claiming something it cannot deliver. It also improves the breach position mater
 compromise of the read model, the cache, the analytics lake or the event log yields pseudonymous
 data rather than identities.
 
-The costs are accepted deliberately. The vault becomes the most security-critical component in
+The costs are accepted with open eyes. The vault becomes the most security-critical component in
 the estate and a hard dependency for any operation needing real identity. Key destruction is
 irreversible — an erroneous erasure cannot be undone, so the request path requires
 authentication, a legal-hold check and an audit record. Per-customer key management at 1M
@@ -401,7 +463,7 @@ aggregate queries (statements, monthly income and expenses), and support erasure
 | Option | Assessment |
 |--------|-----------|
 | Managed key-value store | Excellent single-digit-millisecond key lookups and effortless scaling, but the monthly report (FR-020) needs range scans and aggregation, which would have to be precomputed into yet another store or done in application code |
-| Two engines — key-value for balances, relational for reporting | Best-in-class for each access pattern, at the cost of two engines to operate, two consistency stories and two erasure implementations, for a workload neither engine would find demanding |
+| Two engines — key-value for balances, relational for reporting | Optimal for each access pattern, at the cost of two engines to operate, two consistency stories and two erasure implementations, for a workload neither engine would find demanding |
 | **Managed relational database, multi-AZ with read replicas, plus a cache** | Serves both access patterns; scales out by adding replicas; familiar to the team; one erasure implementation |
 
 **Decision.** A managed PostgreSQL-compatible cluster — one writer, multi-AZ synchronous
@@ -456,11 +518,13 @@ in §3.8.3 — and two platforms to build, secure and operate. The same containe
 manifests run in both (NFR-500), which keeps that cost to infrastructure rather than duplicating
 application work.
 
-The financial consequence deserves stating plainly: on-premises capacity must be bought for
-year-three peak on day one because it cannot autoscale, so it is a flat ~$25,800 per month from
-the start (§3.9.2) — the largest single cost in year 1, and unaffected by having few users. This
-is the strongest argument for keeping the on-premises footprint to genuinely regulated
-workloads and nothing more.
+The financial consequence is worth stating plainly. On-premises capacity must be bought before
+it is needed, because it cannot autoscale. At Year-1 MVP scale it is ~$17,540 per month (HLD
+§3.9.3): the largest single cost in Year 1, and unaffected by having few users — rising to
+~$25,810 by Year 3. It is sized for the MVP plus headroom and incremented in Year 2 rather than
+bought for Year-3 peak on day one, which would tie up capital in hardware idle for two years.
+Either way this is the strongest argument for keeping the on-premises footprint to genuinely
+regulated workloads and nothing more.
 
 Offline fraud placement in the cloud assumes a favourable data-classification review (OI-07); if
 that goes the other way, the pipeline moves on-premises and the on-premises tier must grow.
@@ -498,7 +562,7 @@ thresholds is what makes this a decision rather than an omission.
 
 **Context.** Three distinct populations authenticate: customers, third-party providers under
 Open Banking, and internal services. Consent is a first-class regulatory object with its own
-lifecycle — granted, scoped, expiring, revocable — and it must be enforced at request time, not
+lifecycle — granted, scoped, expiring, revocable, and it must be enforced at request time, not
 merely recorded.
 
 **Decision.** Customers authenticate via OpenID Connect with passkeys as the primary factor and
@@ -521,6 +585,55 @@ resistant to social engineering. Certificate-bound tokens mean a stolen token is
 the corresponding key. Enforcing authorisation twice costs a small amount of duplicated logic and
 is worth it. Placing consent on-premises adds a cross-link call to the Open Banking read path,
 which the short-TTL cache absorbs while keeping revocation prompt.
+
+---
+
+## D15 — Disaster recovery posture
+
+**Related:** NFR-060, NFR-070, NFR-490, C-08, D12. **This decision differs from the target vision
+in the brief and is recorded for that reason.**
+
+**Context.** The brief's target vision shows Production and Disaster Recovery drawn
+symmetrically: a full cloud tier, a full on-premises tier and all three source databases on both
+sides, joined by a replication arrow. Read literally, that is an active-active or hot-standby
+estate with roughly double the infrastructure.
+
+Two things complicate a literal reading. The source databases on the DR side are the mainframe's
+own DB2 and ADABAS, whose replication is part of the existing core platform and outside this
+programme's scope (C-01). And a full hot standby of the new platform roughly doubles the
+on-premises capital cost: the largest single line in Year 1 (§3.9.3) — to protect against a
+site loss whose tolerable recovery time has not yet been agreed ([OI-04](hld.md#8-open-issues)).
+
+**Options.**
+
+| Option | Recovery time | Relative cost | Assessment |
+|--------|---------------|---------------|-----------|
+| Cold standby — hardware ordered on failure | Days | Lowest | Incompatible with any five-nines conversation. Rejected |
+| **Warm standby — DR site provisioned, data replicated, services scaled down** | ≤ 60 min, declared manually | ~30–40% of production | Meets a manually declared site-failover objective at materially lower cost |
+| Hot standby — DR fully scaled, ready to take traffic | Minutes, automatic | ~100% of production | Justified only if the agreed RTO is minutes. Not yet established |
+| Active-active across both sites | Near zero | >100%, plus split-brain and write-arbitration complexity on the money path | Substantial complexity against a one-year MVP deadline (C-06) |
+
+**Decision.** Warm standby. The DR site is provisioned and its data is continuously replicated —
+synchronously for Transfer Orchestrator state, so RPO remains 0 (NFR-040), but its services run
+scaled down until failover is declared. Cloud-side resilience is separate and stronger: three
+availability zones with automatic recovery inside 5 minutes (NFR-060), which handles the failure
+mode that actually occurs frequently.
+
+The split is deliberate. **Frequent, small failures are handled automatically** by multi-AZ
+redundancy. **Rare, large failures** — loss of an entire site — are handled by a declared
+failover inside 60 minutes (NFR-070). Paying hot-standby prices to shorten the rare case, while
+the agreed recovery objective is still open, would be spending before knowing the requirement.
+
+**Consequences.** Approximately $8,000–12,000 per month of on-premises capital cost is avoided
+compared with a symmetric estate, and the DR site still holds a complete, current copy of every
+system of record. The accepted cost is a manual declaration step and up to an hour of degraded
+service in a site-loss scenario — during which, notably, the cloud query path continues serving
+from its own multi-AZ replicas, so customers retain read access throughout.
+
+This is a **conscious divergence from the brief's illustrated vision**, not an oversight. If the
+business continuity workshop ([OI-04](hld.md#8-open-issues)) sets an RTO in minutes rather than an
+hour, the decision inverts to hot standby and §3.9.3 grows accordingly; the topology and
+replication design do not change, only the scale at which the DR services run.
 
 ---
 
