@@ -40,7 +40,7 @@ the same repository as the design.
 
 **Decision.** Diagrams are authored as Mermaid and decisions as records in this log, both
 version-controlled alongside the High Level Design and organised on the C4 model — context,
-container, then cross-cutting and flow views. Images are exported only for the Word submission.
+container, then cross-cutting and flow views.
 
 **Consequences.** Every change is reviewable and attributable, and the diagram cannot silently
 drift from the text describing it. The cost is that Mermaid constrains layout: it cannot produce

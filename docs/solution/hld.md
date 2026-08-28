@@ -1295,8 +1295,7 @@ names how it would be validated.
 # 5. Time Estimation
 
 This section estimates the **Year-1 MVP** only. Year-2 and Year-3 evolution is scope and capacity
-growth, not new construction, and is set out in §1.1.4 and the
-[Delivery Roadmap](../../ROADMAP.md).
+growth, not new construction, and is set out in §1.1.4; the sequencing is in §5.4.
 
 ## 5.1 Capacity basis
 

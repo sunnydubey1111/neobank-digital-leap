@@ -1,7 +1,6 @@
 # Diagrams — NeoBank *Digital Leap*
 
-Every diagram is authored as Mermaid text and renders directly on GitHub and in the published
-site. Structure views are drawn top-down; flow and pipeline views are drawn left-to-right or as
+Structure views are drawn top-down; flow and pipeline views are drawn left-to-right or as
 sequences.
 
 Referenced throughout the [High Level Design](hld.md). Rationale for what these diagrams show is
@@ -714,9 +713,3 @@ flowchart LR
 The asymmetry in the right-hand column is the whole argument. Queries are free to grow; writes
 cost money every time, so the architecture keeps the write count equal to the number of times a
 customer actually moves money — and no higher.
-
----
-
-**Editing.** These are text; edit the fenced blocks and they re-render. Preview at
-<https://mermaid.live>. For the Word submission, `node tools/build-submission.mjs` renders every
-block to PNG and embeds it in a single document; see `tools/export-diagrams.md`.
