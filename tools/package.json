@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@mermaid-js/mermaid-cli": "^11.4.0",
+    "docx": "^9.7.1",
     "marked": "^15.0.0"
   }
 }
