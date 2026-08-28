@@ -140,22 +140,7 @@ const anchored = (h) =>
     (_, level, inner) => `<h${level}><a name="${slug(inner)}">${inner}</a></h${level}>`
   );
 
-const contents = (h) => {
-  const rows = [];
-  for (const m of h.matchAll(/<h([12])><a name="([^"]+)">([\s\S]*?)<\/a><\/h\1>/g)) {
-    const [, level, name, inner] = m;
-    const label = inner.replace(/<[^>]+>/g, "");
-    if (/^contents$/i.test(label)) continue;
-    rows.push(
-      `<p class="toc${level}"><a href="#${name}">${label}</a></p>`
-    );
-  }
-  return `<h1><a name="contents">Contents</a></h1>\n${rows.join("\n")}\n` +
-    `<div style='page-break-before:always'></div>\n`;
-};
-
-const parsed = anchored(marked.parse(merged, { mangle: false }));
-const body = contents(parsed) + parsed;
+const body = anchored(marked.parse(merged, { mangle: false }));
 
 const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
       xmlns:w="urn:schemas-microsoft-com:office:word"
@@ -167,9 +152,6 @@ const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
   @page { size: A4; margin: 2cm; }
   body { font-family: Calibri, "Segoe UI", sans-serif; font-size: 11pt; line-height: 1.45; color: #1a1a1a; }
   a { color: #1f3864; }
-  .toc1 { margin: 6pt 0 2pt 0; font-weight: 600; }
-  .toc2 { margin: 1pt 0 1pt 16pt; }
-  .toc1 a, .toc2 a { text-decoration: none; }
   h1 { font-size: 20pt; color: #1f3864; border-bottom: 2px solid #1f3864; padding-bottom: 4pt; page-break-before: always; }
   h1:first-of-type { page-break-before: avoid; }
   h2 { font-size: 15pt; color: #1f3864; margin-top: 18pt; }

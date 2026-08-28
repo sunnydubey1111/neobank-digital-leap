@@ -23,17 +23,19 @@ try {
     $word.Visible = $false
     $word.DisplayAlerts = 0
 
+    # Background repagination dominates the runtime on a document this long and
+    # is not needed to produce the file.
+    try { $word.Options.Pagination = $false } catch {}
+
     $doc = $word.Documents.Open($src, [ref]$false, [ref]$false)
 
     # 16 = wdFormatDocumentDefault (.docx)
     $doc.SaveAs2($dst, 16)
-    $pages = $doc.ComputeStatistics(2)   # 2 = wdStatisticPages
-    $words = $doc.ComputeStatistics(0)   # 0 = wdStatisticWords
     $doc.Close(0)
     $doc = $null
 
-    Write-Output "Wrote $dst"
-    Write-Output "Pages: $pages   Words: $words"
+    $size = [math]::Round((Get-Item $dst).Length / 1MB, 2)
+    Write-Output "Wrote $dst ($size MB)"
 }
 finally {
     if ($doc)  { try { $doc.Close(0) } catch {} }
