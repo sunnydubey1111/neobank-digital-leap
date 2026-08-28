@@ -9,7 +9,7 @@ A-) are defined there.
 
 | | Decision | Status |
 |---|----------|--------|
-| [D1](#d1--architecture-documented-as-versioned-text) | Architecture documented as versioned text | Accepted |
+| [D1](#d1--architecture-governance-across-eight-delivery-streams) | Architecture governance across eight delivery streams | Accepted |
 | [D2](#d2--service-decomposition-and-integration-style) | Service decomposition and integration style | Accepted |
 | [D3](#d3--mainframe-integration-strategy) | Mainframe integration strategy | Accepted |
 | [D4](#d4--source-system-data-ingestion-approach) | Source-system data ingestion approach | Accepted |
@@ -27,25 +27,39 @@ A-) are defined there.
 
 ---
 
-## D1 — Architecture documented as versioned text
+## D1 — Architecture governance across eight delivery streams
 
-**Related:** NFR-530.
+**Related:** NFR-310, NFR-530, NFR-540.
 
-**Context.** The design will be revised many times over twelve months by a team of 60, and must
-survive as a reference well beyond delivery. Binary diagram files diverge from the document,
-cannot be reviewed line by line, and cannot be diffed.
+**Context.** Eight streams and sixty engineers build against this design over twelve months
+(§4). The properties that make it work — the read/write split, the anti-corruption layer as the
+only transactional route to the core, the token boundary around personal data — all erode
+quietly. Each is one expedient shortcut away from being lost, and none of them fails visibly at
+the moment it is broken. Something has to hold them in place after sign-off.
 
-**Options.** Diagramming suite with exported images · a wiki · diagrams and decisions as text in
-the same repository as the design.
+**Options.** A review board approving each design individually · the constraints asserted in this
+document and left to good intent · **stated invariants, decision records bound to requirement
+identifiers, and conformance checks enforced in the delivery pipeline.**
 
-**Decision.** Diagrams are authored as Mermaid and decisions as records in this log, both
-version-controlled alongside the High Level Design and organised on the C4 model — context,
-container, then cross-cutting and flow views.
+**Decision.** The architecture is governed by three things rather than by meetings. The
+**principles** in §2.3 (P1–P6) are written as invariants rather than preferences, and each one is
+mechanically checkable. Each **decision record** in this log names the requirements it serves, so
+a change can find what it would break before it breaks it. And the constraints that can be
+enforced are enforced in the pipeline rather than in review: no event payload or log line may
+carry a field from the personal-data set (NFR-310); no change reaches an environment except
+through declarative provisioning (NFR-530); nothing reaches production that has not run on a
+pre-production environment topologically identical to it (NFR-540).
 
-**Consequences.** Every change is reviewable and attributable, and the diagram cannot silently
-drift from the text describing it. The cost is that Mermaid constrains layout: it cannot produce
-the hand-tuned composition a dedicated tool can, and complex diagrams must be split rather than
-crowded. That has been accepted as the right trade for reviewability.
+The views themselves are organised on the **C4 model** — system context, containers, then the
+cross-cutting deployment, data and flow views — so each audience reads one diagram pitched at its
+own altitude instead of a single diagram serving none of them well.
+
+**Consequences.** A stream that needs to break an invariant has to change the decision that
+established it, in front of the requirements that decision serves. That is the point of the
+mechanism rather than a side effect of it. The cost is real: conformance checks are engineering
+work that ships no customer-visible feature, and they will occasionally block a legitimate change
+until the corresponding record catches up. Accepted — an invariant nothing enforces is a
+statement of intent, not an architectural constraint.
 
 ---
 
@@ -298,9 +312,12 @@ contract.
 
 *Real-time*, on-premises, on the money path, before the CBS transaction is submitted. Two-stage:
 deterministic rules first, then a model. Features are pre-computed into cache, so the money path
-never queries a database. Hard timeout at 100 ms with an explicit written policy on breach —
-transfers below the low-risk ceiling proceed and are forced into offline review; above it, they
-are held. Placement is on-premises because it sits between the Orchestrator and the ACL, and a
+never queries a database. Hard timeout at 100 ms. A timeout is **not a bypass of the gate — it is one of the gate's
+outcomes**, classified by the same written policy that classifies a score: below the low-risk
+ceiling the policy returns a conditional allow and forces the transfer into offline review; above
+it, the transfer is held for an analyst. Every transfer carries a recorded fraud-gate decision
+before it can reach the ACL, so FR-100 is satisfied on the degraded branch as well as the normal
+one. Placement is on-premises because it sits between the Orchestrator and the ACL, and a
 wide-area round trip inside an 80 ms budget is not affordable.
 
 *Offline*, in the cloud, consuming the posted-transaction stream, scoring against full history
@@ -384,8 +401,8 @@ what to do about the fact that nobody has said.
 |--------|-----------|
 | Commit 99.999% end to end including ledger posting | Not achievable in series against a 99.999% dependency. A promise the design cannot keep. Rejected |
 | Commit a lower single figure such as 99.9% | Contradicts an explicit requirement, and understates what the architecture delivers by a factor of fifty — 525 minutes a year against a composed 10.5. Rejected as both non-compliant and inaccurate |
-| Redefine a queued transfer as complete so the headline reads 99.999% | Satisfies the requirement on paper by misrepresenting the service. A customer whose money has not moved does not have a completed transaction. **Rejected — this is the convenient answer and it is dishonest** |
-| Pick the favourable interpretation and stay quiet about the other | Passes review until someone asks the obvious question. Rejected |
+| Redefine a queued transfer as complete so the headline reads 99.999% | Satisfies the requirement on paper by misrepresenting transaction completion. A customer whose money has not moved does not have a completed transaction. **Rejected** |
+| Commit against one interpretation without stating the other | Leaves the measurement boundary undefined at the point it matters most — the first availability report the risk function reads. Rejected |
 | **Define the candidate indicators, commit against the platform, publish the composed figure for completion, and raise the boundary as an open issue** | Meets the requirement on a stated scope, discloses what it does not cover, and puts the ambiguity where it belongs |
 
 **Decision.** Availability is committed against five named indicators rather than one number
@@ -397,10 +414,12 @@ separately because consent verification gives it a dependency the customer read 
 have: it is served from a cloud consent projection and fails closed once that projection's
 freshness bound expires (NFR-013, NFR-014, [OI-14](hld.md#8-open-issues)).
 
-Folding Open Banking into SLI-2 is the tempting simplification — both are read paths, both are
-served from the cloud. It understates the dependency set, and an indicator that hides a
-dependency is worse than no indicator, because it will be believed. Separating it costs a line in
-the reporting pack and buys an availability model that matches the real dependency graph.
+Open Banking is reported separately from SLI-2 because its consent dependency and its
+fail-closed behaviour differ from the standard customer read path. Both are cloud-served reads,
+so combining them is superficially reasonable — but it understates the dependency set, and an
+indicator that hides a dependency is worse than no indicator, because it will be believed.
+Separating it costs a line in the reporting pack and buys an availability model that matches the
+real dependency graph.
 
 Each is measured and reported separately (NFR-025). No blended figure is published, because a
 blended figure would let core downtime hide inside a platform number.
@@ -461,8 +480,11 @@ vault, backed by a hardware security module. On erasure the vault record is dele
 key is destroyed**. Every derived copy — read model, cache, event log, analytics lake, advisor
 digest, and every backup and archive of any of them — was encrypted under that key and becomes
 permanently unreadable at the same instant. Compacted event-log topics additionally receive a
-tombstone. The ledger retains its legally required financial record, now bearing only a token
-that resolves to nothing.
+tombstone. **No Core Banking System posting is altered.** The ledger is append-only, its records
+are immutable, and this workflow neither deletes nor rewrites them; they stay under the legacy
+retention regime and the statutory basis that requires them. What ends is on the platform's side:
+the mapping from `customer_token` to a real identity no longer exists, so the platform can no longer
+resolve a posting to a person.
 
 **The boundary of that claim.** ADABAS is the bank's customer-information database and holds
 personal data in its own right. It was not written under the platform's keys, so crypto-shredding
@@ -600,7 +622,7 @@ thresholds is what makes this a decision rather than an omission.
 
 ## D14 — Customer identity and consent
 
-**Related:** FR-160, FR-170, FR-220, FR-230, NFR-210, NFR-230.
+**Related:** FR-160, FR-170, FR-220, FR-230, NFR-013, NFR-014, NFR-210, NFR-230.
 
 **Context.** Three distinct populations authenticate: customers, third-party providers under
 Open Banking, and internal services. Consent is a first-class regulatory object with its own
@@ -614,9 +636,19 @@ financial-grade API profile using certificate-bound tokens, so the certificate r
 client identifier is the identity. Services authenticate with mutual TLS and short-lived
 workload identities — no shared secrets anywhere in the estate.
 
-Consent is held on-premises alongside identity, is versioned and revocable, and is validated on
-every Open Banking request and before every advisor retrieval. Validation results are cached
-only briefly, so a revocation takes effect in seconds rather than at the next token refresh.
+Consent is a versioned, revocable record held on-premises alongside identity, which remains its
+authoritative owner. Grants and revocations are published to the event backbone as they occur and
+projected into a **cloud-local consent store** that sits on the Open Banking request path. A
+normal Open Banking request is authorised against that projection and makes **no synchronous call
+across the private link**. Revocation propagates as an event, p95 within 30 seconds.
+
+The projection carries a **heartbeat**, and Open Banking is served only while that heartbeat is
+under five minutes old. Past that bound the projection can no longer be trusted to know about a
+revocation, so the API **fails closed** with `503` — not `403`, because the consent is unknown
+rather than absent (NFR-013, NFR-014). Advisor retrieval runs on-premises beside the consent
+record and is validated against the authoritative store directly. Open Banking availability is
+tracked as its own indicator, **SLI-5**, because neither this dependency nor this failure mode
+belongs to the customer read path (D9).
 
 Authorisation is enforced twice: coarse-grained scope at the gateway, and record ownership again
 in the service holding the data. A gateway alone is a single point of authorisation failure.
@@ -625,8 +657,11 @@ in the service holding the data. A gateway alone is a single point of authorisat
 retail banking fraud, at the cost of a recovery flow for lost devices that must itself be
 resistant to social engineering. Certificate-bound tokens mean a stolen token is useless without
 the corresponding key. Enforcing authorisation twice costs a small amount of duplicated logic and
-is worth it. Placing consent on-premises adds a cross-link call to the Open Banking read path,
-which the short-TTL cache absorbs while keeping revocation prompt.
+is worth it. Keeping consent authoritative on-premises while projecting it into the cloud takes
+the private link off the Open Banking request path without weakening enforcement. The cost is a
+bounded window — at most five minutes — in which a revocation may not yet have reached the
+projection, and a deliberate choice to stop serving rather than to serve on a projection that has
+gone stale. The projection is one more store to operate, monitor and reconcile.
 
 ---
 
@@ -677,11 +712,3 @@ business continuity workshop ([OI-04](hld.md#8-open-issues)) sets an RTO in minu
 hour, the decision inverts to hot standby and §3.9.3 grows accordingly; the topology and
 replication design do not change, only the scale at which the DR services run.
 
----
-
-## Recording a new decision
-
-Add the next identifier in sequence. A useful entry names at least two options that were
-genuinely considered, ties itself to specific requirement identifiers, states the trade-off
-being **accepted** rather than only the benefits obtained, and could be defended out loud to
-someone who preferred a different option.

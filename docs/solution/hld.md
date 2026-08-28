@@ -2,7 +2,7 @@
 
 | Revision | Date | Author | Details |
 |----------|------|--------|---------|
-| 1.0 | 2026-08-28 | Sunny Dubey | First issue. Requirements, assumptions and constraints; architecture, flows, contracts, data and security design; sizing, operational cost model and delivery estimate; decision log and diagram set |
+| 1.0 | 2026-08-28 | Sunny Dubey — sjkumardube@gmail.com | First issue. Requirements, assumptions and constraints; architecture, flows, contracts, data and security design; sizing, operational cost model and delivery estimate; decision log and diagram set |
 
 ## Abstract
 
@@ -250,10 +250,10 @@ NeoBank Digital Platform — the system this document designs. None of them touc
 Banking System on the request path, which is why the figure is achievable: multi-AZ cloud
 services, redundant on-premises hosts, and cross-site synchronous replication of transfer state.
 
-**Open Banking is measured separately, because it depends on more.** An earlier form of this
-model folded Open Banking into SLI-2, which understated its dependency set: consent is owned
-on-premises, and a read served without valid consent is a compliance breach, not a degraded
-response. The design resolves this rather than hiding it.
+**Open Banking is measured separately, because it depends on more.** It is reported apart from
+SLI-2 because its consent dependency and its fail-closed behaviour differ from the standard
+customer read path: consent is owned on-premises, and a read served without valid consent is a
+compliance breach rather than a degraded response.
 
 Consent grants and revocations are published to the event backbone and projected into a
 **cloud-local consent store**, so the request path does not traverse the private link. Revocation
@@ -272,7 +272,7 @@ network operations records in phase 0, not assumed.
 
 **What the design does not claim.** If the intended indicator is SLI-4 — completed money
 movement, end to end — then **the composed figure is 99.998%, which is below the stated
-99.999%.** The design says so rather than obscuring it. No platform-side engineering can raise
+99.999%.** No platform-side engineering can raise
 it while every money movement must be a CBS transaction (C-01, P1); closing that gap is a
 mainframe investment decision, not an architectural one.
 
@@ -543,15 +543,18 @@ would violate P2 and NFR-200.
 2. API Gateway authenticates; step-up authentication is demanded above the configured threshold (FR-230).
 3. The request crosses the private link to the on-premises Transfer Orchestrator.
 4. The Orchestrator records the transfer as `ACCEPTED` in its own durable store — before any scoring or posting. This is what makes NFR-012 and FR-090 achievable independently of the core.
-5. The Real-time Fraud Scorer is called with a hard 100 ms timeout (NFR-150). Features are pre-computed and held in cache; the scorer never queries a database on the money path.
+5. Every transfer is submitted to the Real-time Fraud Scorer, with a hard 100 ms timeout (NFR-150). Features are pre-computed and held in cache; the scorer never queries a database on the money path. The gate always returns a classified decision — `ALLOW`, `BLOCK`, or `TIMEOUT` — and no transfer reaches the ACL without one recorded against it (FR-100).
 6. On `BLOCK`, the transfer moves to `REJECTED_FRAUD`, nothing is posted, and the customer is informed (FR-130).
 7. On `ALLOW`, the Orchestrator calls the ACL, which executes exactly one CBS transaction carrying the idempotency key.
 8. On commit, the Orchestrator moves the transfer to `POSTED`, writes the authoritative post-state into the read cache, and publishes `transfer.completed.v1`.
 9. The client receives the posted balance in the response. The CDC event for the same posting arrives seconds later and is applied idempotently by CBS sequence number — it confirms rather than duplicates.
 
-**Failure behaviour.** If the fraud scorer times out, policy applies: transfers under the
-low-risk ceiling proceed and are flagged for mandatory offline review; transfers above it are
-held. If the ACL call times out with an indeterminate result, the Orchestrator does not retry
+**Failure behaviour.** A scorer timeout is **an outcome of the fraud gate, not a bypass of it**.
+`TIMEOUT` is classified by the same written policy that classifies a score: below the low-risk
+ceiling the policy returns a conditional allow and the transfer is forced into mandatory offline
+review; above it, the transfer moves to `HELD_REVIEW` for an analyst decision. Either way the
+transfer has been evaluated by the real-time fraud check and the decision is recorded against it,
+which is what FR-100 requires. If the ACL call times out with an indeterminate result, the Orchestrator does not retry
 blindly — it queries the CBS by idempotency key to establish the true outcome, then converges.
 If the core is unavailable, accepted transfers stay durably queued in `ACCEPTED` and the app
 shows them as pending, never as complete (FR-090, NFR-030).
@@ -607,8 +610,11 @@ of the legacy estate.
 **Within the digital platform — immediate.** The platform deletes the vault record and
 **destroys the customer's data encryption key**. Every derived copy — read model, cache, event
 log, analytics lake, backups, the advisor's digest — is encrypted under that key and becomes
-permanently unreadable at the same instant. Compacted event-log topics receive a tombstone. The
-ledger's own record is retained, now bearing only a `customer_token` that resolves to nothing.
+permanently unreadable at the same instant. Compacted event-log topics receive a tombstone.
+**No Core Banking System posting is altered.** The ledger is append-only and its records are
+immutable; this workflow neither deletes nor rewrites them, and they remain under the legacy
+retention regime. What ends is the platform's ability to resolve a `customer_token` to a
+person, because the mapping and the key that protected it are gone.
 
 **Within the legacy estate — a tracked request.** ADABAS holds the customer master and was not
 written under the platform's keys, so key destruction does not reach it. The workflow raises an
@@ -657,7 +663,8 @@ registry under `BACKWARD` compatibility (NFR-320), and identify the customer onl
 | `amount` | object | `{ value: integer minor units, currency: ISO 4217 }` — never floating point |
 
 Response `202 Accepted` carries `transfer_id`, `status`, and `estimated_completion`. Status is
-one of `ACCEPTED`, `SCORING`, `POSTED`, `REJECTED_FRAUD`, `REJECTED_FUNDS`, `REVERSED`, `FAILED`.
+one of `ACCEPTED`, `SCORING`, `HELD_REVIEW`, `POSTED`, `REJECTED_FRAUD`, `REJECTED_FUNDS`,
+`REVERSED`, `FAILED`.
 The `202` matters more than the field list: acceptance and completion are different events, and
 the contract says so at the first response rather than implying that a transfer is done.
 
@@ -865,23 +872,25 @@ erasure workflow rather than performed by it.
 | DB2 — ledger | Financial records are retained. Statutory retention overrides the erasure right for transaction records, and the design does not attempt to delete them |
 | SQL Server | Treated the same way as ADABAS **if** it proves to hold customer-identifiable data. Whether it does is [OI-10](#8-open-issues); the erasure workflow includes it conditionally rather than assuming either answer |
 
-**3. What is retained, and why.** The financial record survives in pseudonymous form: the ledger
-entry remains, the token on it resolves to nothing, and the person is no longer identifiable from
-the platform's side. That is the intended end state where retention and erasure conflict.
+**3. What is retained, and why.** The financial record survives untouched. Core Banking System
+postings are immutable and are neither deleted nor rewritten by this workflow; they stay under
+the legacy retention regime and the statutory basis that requires them. What the erasure removes
+is the platform's ability to connect them to a named person. That is the intended end state
+where retention and erasure conflict.
 
 | Category | Treatment | Basis |
 |----------|-----------|-------|
 | Derived personal data in new stores | Erased, by key destruction | No independent retention obligation |
 | Advisory and analytics derivations | Erased, by key destruction | No independent retention obligation |
-| Financial transaction records | Retained, pseudonymised | Statutory retention (C-05) |
-| Audit records — consent, fraud verdicts, erasure itself | Retained, pseudonymised | Regulatory obligation; the erasure event must itself be auditable |
+| Core Banking System ledger postings | Retained unaltered under the legacy retention regime; not deleted or rewritten by this workflow | Statutory retention (C-05) |
+| Platform audit records — consent, fraud verdicts, erasure itself | Retained, identifying the customer only by token | Regulatory obligation; the erasure event must itself be auditable |
 | Legacy customer master attributes | Referred to the legacy retention process | Outside this platform's control |
 
-The honest summary: this design can guarantee that **the digital platform** holds no readable
-personal data for an erased customer, immediately and including its backups. It cannot
-unilaterally guarantee the same of the mainframe estate, and it does not claim to. Closing that
-second half is a legacy-side workstream, dependent on counsel's position ([OI-02](#8-open-issues))
-and on what the customer master's retention process permits.
+**Summary.** The design guarantees that **the digital platform** holds no readable personal data
+for an erased customer, immediately and including its backups. It cannot unilaterally guarantee
+the same of the legacy estate, and does not claim to: that half is a legacy-side workstream,
+dependent on counsel's position ([OI-02](#8-open-issues)) and on what the customer master's
+retention process permits.
 
 ## 3.6 Security Architecture
 
@@ -929,7 +938,7 @@ service that needed legacy data would have to go through the ACL, which is the p
 |-----------|-----------|
 | Customer | OpenID Connect; passkeys as the primary factor with device binding; step-up re-authentication for transfers above threshold (FR-230); short-lived access tokens, refresh bound to the device |
 | Service | Mutual TLS with workload identities issued per service, certificates rotated automatically; no shared secrets and no long-lived service passwords |
-| Third-party provider | OAuth 2.0 client credentials under a financial-grade API profile, certificate-bound tokens, plus a consent reference validated per request (FR-160) |
+| Third-party provider | OAuth 2.0 client credentials under a financial-grade API profile, certificate-bound tokens, plus a consent reference validated on every request against the cloud consent projection (FR-160, §3.3.4) |
 | Operator | Federated single sign-on with hardware multi-factor; no standing production access — access is requested, time-boxed, approved and recorded |
 | Batch and pipelines | Workload identity federation; no static cloud credentials anywhere in the estate |
 

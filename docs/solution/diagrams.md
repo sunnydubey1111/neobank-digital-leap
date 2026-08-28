@@ -503,6 +503,10 @@ sequenceDiagram
         O->>O: state POSTED
         O->>$: write through, authoritative post-state
         O-->>C: 200 POSTED + new balance
+    else TIMEOUT — no verdict inside the 100 ms budget
+        F--xO: budget exceeded
+        O->>O: fraud policy classifies the TIMEOUT
+        Note over O,F: A timeout is a gate OUTCOME, not a bypass (FR-100).<br/>Below the low-risk ceiling: conditional allow, offline review forced.<br/>Above it: state HELD_REVIEW, analyst decides.
     end
 
     Note over O,ACL: On an indeterminate result the Orchestrator never blindly retries.<br/>It queries the CBS by idempotency key and converges.
@@ -635,7 +639,7 @@ sequenceDiagram
         B-->>B: tombstone on compacted topics
     end
     Note over V,L: Backups and archives are covered too —<br/>they were encrypted under the destroyed key.
-    Note over CBS: The ledger keeps its legally required financial record,<br/>now bearing only a token that resolves to nothing.
+    Note over CBS: CBS postings are immutable and are NOT rewritten.<br/>They stay under the legacy retention regime.<br/>What ends is the platform's ability to resolve them to a person.
     CO-->>C: erasure confirmed
 ```
 
@@ -645,15 +649,20 @@ sequenceDiagram
 
 The lifecycle FR-090 requires the customer to be able to see at any moment. Note that
 `REJECTED_FRAUD` is reached **without any posting**, while `REVERSED` is reached only from
-`POSTED`.
+`POSTED`. Every path out of `SCORING` carries a recorded fraud-gate decision, including the
+timeout paths — nothing reaches `SUBMITTED` unevaluated (FR-100).
 
 ```mermaid
 stateDiagram-v2
     [*] --> ACCEPTED: command persisted, replicated
-    ACCEPTED --> SCORING: submit to real-time fraud scorer
+    ACCEPTED --> SCORING: every transfer submitted to<br/>the real-time fraud gate (FR-100)
     SCORING --> REJECTED_FRAUD: BLOCK — cancelled before posting (FR-120)
     SCORING --> QUEUED: core unavailable
     SCORING --> SUBMITTED: ALLOW
+    SCORING --> SUBMITTED: TIMEOUT below low-risk ceiling —<br/>policy conditional allow, offline review forced
+    SCORING --> HELD_REVIEW: TIMEOUT above low-risk ceiling —<br/>policy hold
+    HELD_REVIEW --> SUBMITTED: analyst releases
+    HELD_REVIEW --> REJECTED_FRAUD: analyst rejects
     QUEUED --> SUBMITTED: core recovered, store-and-forward drains
     SUBMITTED --> POSTED: CBS commit confirmed
     SUBMITTED --> REJECTED_FUNDS: insufficient funds
@@ -677,6 +686,14 @@ stateDiagram-v2
     note right of INDETERMINATE
         Never resolved by blind retry.
         A retry could double-post money.
+    end note
+
+    note right of HELD_REVIEW
+        A scorer timeout is a classified
+        outcome of the fraud gate, never
+        a bypass of it. Every transfer
+        leaves SCORING with a recorded
+        decision against it.
     end note
 ```
 
