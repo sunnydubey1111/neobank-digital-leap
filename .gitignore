@@ -1,0 +1,52 @@
+# ───────────────────────────────────────────────────────────────
+# COPYRIGHTED COURSE MATERIAL — never commit to a public repo.
+# The Global Dev Experts slides, recordings and summaries are
+# "All Rights Reserved". Keep them OUT of version control.
+# ───────────────────────────────────────────────────────────────
+*.pdf
+*.docx
+*.pptx
+*.mp4
+*.zip
+Week */
+Zip_bk_up/
+**/*Recording*
+**/*Deck*
+**/*Summary*
+
+# Allow my own exported diagrams/PDFs if I ever want them (opt-in):
+!docs/**/*.png
+!docs/**/*.svg
+
+# ───────────────────────────────────────────────────────────────
+# MkDocs / docs site build output
+# ───────────────────────────────────────────────────────────────
+site/
+.cache/
+
+# ───────────────────────────────────────────────────────────────
+# Python (for mkdocs / tooling)
+# ───────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ───────────────────────────────────────────────────────────────
+# Node / reference implementation (if added later)
+# ───────────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+target/
+*.log
+
+# ───────────────────────────────────────────────────────────────
+# OS / editor cruft
+# ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

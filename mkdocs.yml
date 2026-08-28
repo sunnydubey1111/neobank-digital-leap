@@ -1,0 +1,44 @@
+site_name: NeoBank — Project Digital Leap
+site_description: High-Level Architecture Design for a retail-bank digital transformation
+site_author: Sunny Dubey
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: cyan
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: deep purple
+      accent: cyan
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - tables
+  - toc: { permalink: true }
+
+nav:
+  - Home: index.md
+  - The design:
+      - High Level Design: solution/hld.md
+      - Decision Log: solution/decisions.md
+      - Diagrams: solution/diagrams.md
+  - Background notes:
+      - Foundations: learn/week-01.md
+      - Architecture patterns I: learn/week-02.md
+      - Architecture patterns II: learn/week-03.md
+      - Storage architecture: learn/week-04.md
+      - Network architecture: learn/week-05.md
