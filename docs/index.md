@@ -12,6 +12,11 @@ Regulation and fintech competition now demand millisecond digital experiences at
 release cadence the mainframe was never designed for, while every money movement must still be a
 Core Banking System transaction.
 
+**About this project.** The final project of the Global Dev Experts *Software Architect*
+programme, written against a fixed brief. The brief gave the business context, requirements and
+constraints; the architecture and everything that follows from it are mine. Ambiguities in the
+brief are recorded as assumptions and open issues rather than resolved silently.
+
 ## The central idea
 
 **Separate the read path from the write path.** Money movement stays a CBS transaction, reached
