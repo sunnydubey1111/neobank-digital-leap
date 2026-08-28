@@ -20,7 +20,7 @@ flowchart LR
     r[("System of record<br/>authoritative, not rebuildable")]:::sor
     d[("Derived store<br/>rebuildable from the log")]:::store
     b["Event log<br/>ordered, replayable"]:::bus
-    a["Anti-corruption layer<br/>the only route to the core"]:::acl
+    a["Anti-corruption layer<br/>only transactional route to the core"]:::acl
     l["Legacy core platform<br/>CBS, DB2, ADABAS"]:::legacy
     y[["Trust boundary crossing"]]:::boundary
     x["External system"]:::external
@@ -63,17 +63,17 @@ flowchart TB
     llm["Managed Model Service"]:::external
     reg["Regulator"]:::external
 
-    cust -->|views balances, transfers funds| sys
+    cust -->|balances and transfers| sys
     analyst -->|reviews and approves reversals| sys
-    tpp -->|Open Banking REST, under consent| sys
+    tpp -->|Open Banking, under consent| sys
 
-    sys -->|every money movement<br/>as a CBS transaction| core
+    sys -->|CBS transactions only| core
     core -.->|change data capture| sys
     sqlsrv -.->|change data capture| sys
     sys -->|settles external transfers| banks
     sys -->|authenticates customers| idp
-    sys -->|tokenised spend digest only| llm
-    sys -->|audit records, 7-year retention| reg
+    sys -->|tokenised digest only| llm
+    sys -->|audit records, 7 years| reg
 
     classDef person fill:#08427b,stroke:#052e56,color:#fff
     classDef svc fill:#1168bd,stroke:#0b4884,color:#fff
@@ -251,7 +251,7 @@ flowchart TB
 
     subgraph corezone["Core zone — ONE admitted path"]
         direction LR
-        acl["Anti-Corruption Layer<br/>the only route to the CBS"]:::acl
+        acl["Anti-Corruption Layer<br/>only transactional route to CBS"]:::acl
         cbs["CBS, COBOL on z/OS"]:::legacy
         db2[("DB2<br/>transactions")]:::legacy
         adabas[("ADABAS<br/>customers")]:::legacy
@@ -294,7 +294,7 @@ Three things are worth reading off these two diagrams together:
 - **Nothing in the cloud half has a line into the core zone.** Reads never reach the mainframe
   (P2), which is what delivers both the latency target and the 93% reduction in mainframe
   operations.
-- **Exactly one box touches the CBS**, and it is red. That is the anti-corruption layer (P3),
+- **Exactly one box submits transactions to the CBS**, and it is red. That is the anti-corruption layer (P3),
   and it is also the enforcement point for quota, idempotency and cost metering (P7).
 - **The dotted lines out of DB2, ADABAS and SQL Server are the whole data path.** Change data
   capture flows one way, out of the sources and into the derived stores. Nothing flows back in
@@ -390,7 +390,11 @@ flowchart TB
     subgraph dc1["ON-PREMISES DC1 — production"]
         dmz1[["DMZ<br/>link termination"]]:::boundary
         az1["Application zone<br/>orchestrator, fraud, consent,<br/>vault, event backbone"]:::svc
-        cz1["Core zone<br/>ACL, HSM, CBS, DB2, ADABAS"]:::acl
+        subgraph cz1["Core zone"]
+            acl1["Anti-corruption layer"]:::acl
+            cdc1["CDC adapters"]:::acl
+            core1[("CBS, DB2, ADABAS<br/>HSM")]:::store
+        end
     end
 
     subgraph dc2["ON-PREMISES DC2 — disaster recovery"]
@@ -408,7 +412,10 @@ flowchart TB
 
     pods ==>|mutual TLS, 2 dedicated links,<br/>diverse paths, VPN fallback| dmz1
     dmz1 -->|firewall| az1
-    az1 -->|single admitted path:<br/>ACL only, whitelisted, quota| cz1
+    az1 ==>|COMMAND PATH<br/>CBS transactions, quota| acl1
+    acl1 ==> core1
+    core1 -.->|CAPTURE PATH<br/>read-only change logs| cdc1
+    cdc1 -.->|domain events| az1
 
     dc1 -.->|synchronous for transfer state, RPO 0<br/>asynchronous for bulk| dc2
 
@@ -420,8 +427,11 @@ flowchart TB
 ```
 
 The isolated data subnets have no route to a NAT gateway, so a compromised database cannot call
-out. The core zone admits exactly one source — the anti-corruption layer — which is what NFR-280
-requires and what makes the mainframe cost controllable as well as secure.
+out. The core zone carries two paths and the firewall policy treats them as different things.
+The **command path**, drawn as a solid arrow, admits exactly one source — the anti-corruption
+layer — which is what NFR-280 requires and what makes the mainframe cost controllable as well as
+secure. The **capture path**, drawn dotted, is read-only log capture flowing outward into the
+event backbone (NFR-285); it accepts no inbound call, so it cannot become a second way in.
 
 ---
 
@@ -544,24 +554,30 @@ sequenceDiagram
     participant T as Third-Party Provider
     participant OBGW as Open Banking Ingress
     participant OB as Open Banking API
-    participant CO as Consent Service (on-prem)
+    participant CP as Consent Projection (cloud)
     participant RR as Dedicated Read Replicas
+    participant CO as Consent Service (on-prem)
+
+    CO--)CP: consent granted or revoked,<br/>via event backbone, p95 30 s
 
     T->>OBGW: mTLS + OAuth2 certificate-bound token
     OBGW->>OBGW: verify certificate binding,<br/>enforce per-TPP quota
     OBGW->>OB: GET /open-banking/v1/accounts
-    OB->>CO: validate consent (short-TTL cached)
-    alt consent valid and unexpired
-        CO-->>OB: scopes granted
+    OB->>CP: consent for this reference?
+    alt projection stale, heartbeat over 5 min
+        CP-->>OB: freshness bound exceeded
+        OB-->>T: 503 consent_unverifiable
+    else consent revoked or expired
+        CP-->>OB: denied
+        OB-->>T: 403 consent_required
+    else consent valid and projection fresh
+        CP-->>OB: scopes granted
         OB->>RR: query, dedicated replicas
         RR-->>OB: rows
         OB-->>T: 200 OK + as_of
-    else consent revoked or expired
-        CO-->>OB: denied
-        OB-->>T: 403 consent_required
     end
 
-    Note over OBGW,RR: Dedicated ingress and replicas are a bulkhead:<br/>TPP load cannot degrade the bank's own customers,<br/>and never reaches the core.
+    Note over OBGW,CO: Consent is validated in the cloud, so the request path<br/>does not cross the private link. Past the freshness bound<br/>the API fails closed rather than serve on uncertain consent.
 ```
 
 ### 6.5 AI advisor consultation — FR-190 to FR-210

@@ -48,7 +48,7 @@ sized instead for the MVP plus a defined growth headroom, with a planned increme
 |---|---|
 | Developers available | 60 — 5 COBOL, 55 mostly Java/AWS |
 | Productive days per developer per year | 219 — 260 weekdays less 25 annual leave, 11 public holidays, 5 training |
-| **Productive days per developer-month** | **18** |
+| **Planning days per developer-month** | **18** — 219 ÷ 12 = 18.25, rounded down. The quarter-day is discarded rather than planned against |
 | Organisational capacity | 60 × 12 × 18 = **12,960 developer-days** |
 | Planned MVP effort | **7,980 developer-days** |
 | Peak concurrent headcount | **57 of 60** — 3 held as floating reserve |

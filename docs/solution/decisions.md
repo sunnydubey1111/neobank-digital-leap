@@ -99,10 +99,18 @@ months. This is the decision every other decision depends on.
 
 **Decision.** The Core Banking System remains the system of record for money and is unchanged.
 Every money movement is a CBS transaction (P1). A single on-premises **anti-corruption layer**
-is the only component permitted to speak to it (P3); it publishes a small domain contract —
+is the only component permitted to transact with it (P3); it publishes a small domain contract —
 described in HLD §3.4.3 — and absorbs COBOL, DB2, ADABAS, CICS and MQ entirely. The strangler-fig
 direction is preserved: because every consumer already talks to the ACL's contract rather than
 to the core, function can later be moved behind that contract without any consumer changing.
+
+**What "only" means here.** The ACL's exclusivity is over the **command path**: transactions and
+operational queries. It is not a claim that no other process has any connectivity to the legacy
+estate, because change data capture (D4) necessarily reads the source systems' change logs. That
+access is read-only, confined to log capture, and exposes nothing a service can call. The two
+paths are separated deliberately — see NFR-280 and NFR-285 — and the separation is what keeps the
+exclusivity claim both true and enforceable. A design that said "one component, all access" would
+be contradicted by its own ingestion tier.
 
 **Consequences.** The write path inherits the core's latency, and transfer *execution* inherits
 the core as a serial availability dependency (D9); the transfer latency budget allocates 250 ms
@@ -143,6 +151,17 @@ committed changes to the event backbone as canonical domain events. For ADABAS, 
 replication where the installation supports it, with a scheduled delta extract as the designed
 fallback. All three producers run on-premises; the cloud consumes a mirror of the log and never
 reaches back for data.
+
+**The access this requires, and its limits.** Capture adapters hold read access to change logs
+and nothing more. Each runs as a dedicated component in the core zone with its own credentials,
+scoped to log capture on its own source, and offers no interface that a business service could
+call. It cannot issue a transaction, and it cannot answer a query on a service's behalf. This
+keeps the ACL's exclusivity over the command path intact (D3, P3) while acknowledging plainly
+that ingestion does touch the source systems — because a design that denied it would be
+describing something other than what it builds. The constraint that matters is directional: the
+capture path must never acquire request-time semantics. An adapter extended to serve a lookup
+would have become a second integration route to the core, which is precisely what NFR-280 exists
+to prevent.
 
 The ingestion tier is **source-agnostic by design**: every producer emits the same event
 contract (§3.4.4), so adding, replacing or re-scoping a source changes which events exist, not
@@ -369,11 +388,19 @@ what to do about the fact that nobody has said.
 | Pick the favourable interpretation and stay quiet about the other | Passes review until someone asks the obvious question. Rejected |
 | **Define the candidate indicators, commit against the platform, publish the composed figure for completion, and raise the boundary as an open issue** | Meets the requirement on a stated scope, discloses what it does not cover, and puts the ambiguity where it belongs |
 
-**Decision.** Availability is committed against four named indicators rather than one number
-(HLD §2.2.1). SLI-1 digital channel, SLI-2 read service and SLI-3 transfer-request acceptance
-together constitute the **NeoBank Digital Platform: the system this document designs — and are
-committed at 99.999%** (NFR-010). SLI-4, CBS-backed completion, additionally depends on the core
-and composes to **99.998%** (NFR-020).
+**Decision.** Availability is committed against five named indicators rather than one number
+(HLD §2.2.1). SLI-1 digital channel, SLI-2 customer read service and SLI-3 transfer-request
+acceptance together constitute the **NeoBank Digital Platform: the system this document designs —
+and are committed at 99.999%** (NFR-010). SLI-4, CBS-backed completion, additionally depends on
+the core and composes to **99.998%** (NFR-020). SLI-5, the Open Banking read service, is reported
+separately because consent verification gives it a dependency the customer read path does not
+have: it is served from a cloud consent projection and fails closed once that projection's
+freshness bound expires (NFR-013, NFR-014, [OI-14](hld.md#8-open-issues)).
+
+Open Banking was originally folded into SLI-2. That was wrong — it understated the dependency
+set, and an indicator that hides a dependency is worse than no indicator, because it will be
+believed. Separating it costs a line in the reporting pack and buys an availability model that
+matches the real dependency graph.
 
 Each is measured and reported separately (NFR-025). No blended figure is published, because a
 blended figure would let core downtime hide inside a platform number.
@@ -410,11 +437,14 @@ anyway and which is better than either refusing the transfer or misreporting it.
 
 **Related:** FR-240, NFR-250, NFR-270, C-05, A-15.
 
-**Context.** A customer may demand erasure of all their data. Financial records carry a statutory
-retention period measured in years, so the ledger entries cannot lawfully be deleted. The same
-personal data has also been copied, by design, into the read model, cache, event log, analytics
-lake, advisor digest, and every backup and archive of those. Two legal obligations point in
-opposite directions, and a design that ignores either one is not deliverable.
+**Context.** A customer may demand erasure of all their data. Three facts constrain the answer.
+Financial records carry a statutory retention period measured in years, so ledger entries cannot
+lawfully be deleted. Personal data is also copied, by design, into the read model, cache, event
+log, analytics lake, advisor digest, and every backup and archive of those. And ADABAS is the
+bank's customer-information database — personal data was there before this programme started and
+remains there under the legacy retention regime. Two legal obligations point in opposite
+directions, across systems under two different owners, and a design that ignores any part of that
+is not deliverable.
 
 **Options.**
 
@@ -424,20 +454,32 @@ opposite directions, and a design that ignores either one is not deliverable.
 | Retain everything and rely on a legal exemption | Not defensible for derived marketing- and analytics-grade copies that carry no retention obligation of their own. Rejected |
 | **Tokenise personal data and crypto-shred on erasure** | Reaches every copy simultaneously, including offline media, and preserves the statutory financial record |
 
-**Decision.** Personal data lives in exactly one place: the on-premises PII Vault — and travels
-everywhere else only as an opaque `customer_token` (P5). Each customer's personal data is
-encrypted under a per-customer data encryption key held in the vault, backed by a hardware
-security module. On erasure the vault record is deleted and **that key is destroyed**. Every
-derived copy — read model, cache, event log, analytics lake, advisor digest, and every backup and
-archive of any of them — was encrypted under that key and becomes permanently unreadable at the
-same instant. Compacted event-log topics additionally receive a tombstone. The ledger retains
-its legally required financial record, now bearing only a token that resolves to nothing.
+**Decision.** Within the digital platform, personal data lives in exactly one store — the
+on-premises PII Vault — and travels everywhere else only as an opaque `customer_token` (P5).
+Each customer's personal data is encrypted under a per-customer data encryption key held in the
+vault, backed by a hardware security module. On erasure the vault record is deleted and **that
+key is destroyed**. Every derived copy — read model, cache, event log, analytics lake, advisor
+digest, and every backup and archive of any of them — was encrypted under that key and becomes
+permanently unreadable at the same instant. Compacted event-log topics additionally receive a
+tombstone. The ledger retains its legally required financial record, now bearing only a token
+that resolves to nothing.
 
-**Consequences.** This satisfies both obligations at once, and it is the only mechanism that
-reaches backup and archive media — no row-level delete can, and any design claiming otherwise is
-claiming something it cannot deliver. It also improves the breach position materially: a
-compromise of the read model, the cache, the analytics lake or the event log yields pseudonymous
-data rather than identities.
+**The boundary of that claim.** ADABAS is the bank's customer-information database and holds
+personal data in its own right. It was not written under the platform's keys, so crypto-shredding
+does not reach it, and this design does not pretend otherwise. Erasure there is a request into
+the customer master's own retention process, raised and tracked by the erasure workflow but
+performed by the legacy side on its own timetable. SQL Server is treated the same way if OI-10
+establishes that it holds customer-identifiable data. So the claim this decision supports is
+precise: *the digital platform holds no readable personal data for an erased customer* —
+not *the bank holds none anywhere*. The second statement would be false, and stating it would
+misrepresent a dependency the programme does not control.
+
+**Consequences.** For everything the programme builds, this satisfies both obligations at once,
+and it is the only mechanism that reaches backup and archive media — no row-level delete can, and
+any design claiming otherwise is claiming something it cannot deliver. It also improves the breach
+position materially: a compromise of the read model, the cache, the analytics lake or the event
+log yields pseudonymous data rather than identities. The cost is that full erasure becomes a
+two-party operation, and the legacy half sets the completion time.
 
 The costs are accepted with open eyes. The vault becomes the most security-critical component in
 the estate and a hard dependency for any operation needing real identity. Key destruction is
@@ -499,7 +541,7 @@ sensitivity or latency-to-core requires it; otherwise it runs in the cloud.
 
 | On-premises | Why |
 |-------------|-----|
-| Anti-corruption layer | The only admitted path to the core zone (NFR-280) |
+| Anti-corruption layer | The only component admitted to the core zone for transactions (NFR-280) |
 | Transfer Orchestrator | Holds in-flight money state; must survive a cloud outage; must be adjacent to the ACL |
 | Real-time fraud scorer | An 80 ms budget cannot absorb a wide-area round trip, and it needs full unmasked transaction context |
 | Consent and identity, PII Vault | Raw personal data and per-customer keys; hardware security modules |
@@ -519,9 +561,9 @@ manifests run in both (NFR-500), which keeps that cost to infrastructure rather 
 application work.
 
 The financial consequence is worth stating plainly. On-premises capacity must be bought before
-it is needed, because it cannot autoscale. At Year-1 MVP scale it is ~$17,540 per month (HLD
+it is needed, because it cannot autoscale. At Year-1 MVP scale it is ~$17,544 per month (HLD
 §3.9.3): the largest single cost in Year 1, and unaffected by having few users — rising to
-~$25,810 by Year 3. It is sized for the MVP plus headroom and incremented in Year 2 rather than
+~$25,811 by Year 3. It is sized for the MVP plus headroom and incremented in Year 2 rather than
 bought for Year-3 peak on day one, which would tie up capital in hardware idle for two years.
 Either way this is the strongest argument for keeping the on-premises footprint to genuinely
 regulated workloads and nothing more.
@@ -598,9 +640,9 @@ symmetrically: a full cloud tier, a full on-premises tier and all three source d
 sides, joined by a replication arrow. Read literally, that is an active-active or hot-standby
 estate with roughly double the infrastructure.
 
-Two things complicate a literal reading. The source databases on the DR side are the mainframe's
-own DB2 and ADABAS, whose replication is part of the existing core platform and outside this
-programme's scope (C-01). And a full hot standby of the new platform roughly doubles the
+Two things complicate a literal reading. The source systems on the DR side — DB2 and ADABAS on
+the mainframe, and the SQL Server estate beside them — replicate under their existing platform
+arrangements, which are outside this programme's scope (C-01). And a full hot standby of the new platform roughly doubles the
 on-premises capital cost: the largest single line in Year 1 (§3.9.3) — to protect against a
 site loss whose tolerable recovery time has not yet been agreed ([OI-04](hld.md#8-open-issues)).
 

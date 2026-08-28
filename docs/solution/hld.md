@@ -2,16 +2,14 @@
 
 | Revision | Date | Author | Details |
 |----------|------|--------|---------|
-| 0.1 | 2026-06-03 | Sunny Dubey | Requirements, assumptions and constraints baselined |
-| 0.2 | 2026-07-08 | Sunny Dubey | Preliminary solution diagram; core integration and read-path decisions |
-| 0.3 | 2026-08-19 | Sunny Dubey | Data, security and performance architecture |
-| 1.0 | 2026-08-28 | Sunny Dubey | Flows, contracts, sizing, cost model and delivery estimate; issued for review |
+| 1.0 | 2026-08-28 | Sunny Dubey | First issue. Requirements, assumptions and constraints; architecture, flows, contracts, data and security design; sizing, operational cost model and delivery estimate; decision log and diagram set |
 
 ## Abstract
 
 NeoBank is a publicly traded retail bank — 1M customers, 200 branches, 10,000 employees,
 founded 1905 — whose Core Banking System is COBOL running on z/OS, with DB2 holding
-transactions and ADABAS holding customer information. That core delivers what a bank is
+transactions and ADABAS holding customer information, alongside a SQL Server estate that forms
+a third source system. That core delivers what a bank is
 legally required to deliver: strong consistency, an accurate ledger, full audit trails and
 five-nines reliability. It also charges for every operation, and it was never designed for the
 latency, concurrency and release cadence that digital channels demand.
@@ -51,8 +49,9 @@ resolve.
 7. [Risks and Mitigations](#7-risks-and-mitigations)
 8. [Open Issues](#8-open-issues)
 
-Companion documents: the [Decision Log](decisions.md) records the reasoning behind each
-significant choice; [Diagrams](diagrams.md) holds every diagram referenced here.
+Two appendices follow the design. [Appendix A — Decision Log](decisions.md) records the reasoning
+behind each significant choice; [Appendix B — Diagrams](diagrams.md) contains every diagram
+referenced here.
 
 ---
 
@@ -111,8 +110,8 @@ for both stages, and the Year-3 column is a target state, not work delivered in 
 | Peak transfer throughput | ~8 tx/s | ~28 tx/s | ~80 tx/s |
 | Functional scope | Every *Must* requirement in §2.1 | Depth and quality, no new *Must* capability | Unchanged feature set at ten times the scale |
 | AI advisor (FR-190, *Should*) | First version, narrow scope | Full rollout | At scale |
-| Read model | 1 writer + 1 replica | + 1 replica | 1 writer + 3 replicas |
-| On-premises estate | 12 servers, 40 TB | + 4 servers, + 40 TB | 20 servers, 120 TB |
+| Read model | 1 writer + 1 replica | 1 writer + 2 replicas | 1 writer + 3 replicas |
+| On-premises estate | 12 servers, 40 TB | 16 servers, 80 TB | 20 servers, 120 TB |
 | Cloud region and AZs | 1 region, 3 AZs | unchanged | unchanged |
 
 **No structural change occurs between the stages.** The same components, contracts, trust
@@ -135,7 +134,7 @@ Sections 3.3–3.8 and 5–8 carry the detail that engineering and operations ne
 
 | Term | Meaning |
 |------|---------|
-| ACL | Anti-corruption layer — the only component permitted to speak to the Core Banking System |
+| ACL | Anti-corruption layer — the only component permitted to transact with the Core Banking System |
 | ADABAS | Software AG database holding the customer master on the mainframe |
 | BFF | Backend for frontend — a channel-specific API aggregating services for the app or web client |
 | CBS | Core Banking System — the COBOL/z-OS ledger; system of record for money |
@@ -232,23 +231,44 @@ Every requirement is testable and uses *shall*.
 
 **The requirement is 99.999% uptime.** The brief does not define the service-level indicator —
 what is being measured as "up" — and the choice of indicator changes the answer materially. This
-section states the target, sets out the four things that could reasonably be measured against
+section states the target, sets out the five things that could reasonably be measured against
 it, and says which of them the design commits to and which it does not. The boundary itself is
 not ours to settle unilaterally; it is recorded as [OI-13](#8-open-issues).
 
-**Four candidate indicators.** They differ only in what they depend on.
+**Five candidate indicators.** They differ only in what they depend on.
 
 | Indicator | What it measures | Depends on | Figure |
 |-----------|------------------|------------|--------|
 | SLI-1 | Digital channel and API — the gateway authenticates and routes | Cloud edge | 99.999% |
-| SLI-2 | Read service — balance, transactions, reports, Open Banking answered | Cloud edge, read model, cache | 99.999% |
+| SLI-2 | Customer read service — balance, transactions, reports | Cloud edge, read model, cache | 99.999% |
 | SLI-3 | Transfer-request acceptance — request durably recorded, replicated and acknowledged **as pending** | Cloud edge, private link, on-premises orchestrator | 99.999% |
 | SLI-4 | **CBS-backed completion** — money posted to the ledger | All of the above **plus the Core Banking System** | **99.998%** |
+| SLI-5 | Open Banking read service — a third-party request answered under valid consent | Cloud edge, read model, **cloud consent projection**, and the private link once the freshness bound expires | 99.999%, conditional — see below |
 
 **What the design commits to.** SLI-1 to SLI-3, at 99.999% (NFR-010). Together these are the
 NeoBank Digital Platform — the system this document designs. None of them touches the Core
 Banking System on the request path, which is why the figure is achievable: multi-AZ cloud
 services, redundant on-premises hosts, and cross-site synchronous replication of transfer state.
+
+**Open Banking is measured separately, because it depends on more.** An earlier form of this
+model folded Open Banking into SLI-2, which understated its dependency set: consent is owned
+on-premises, and a read served without valid consent is a compliance breach, not a degraded
+response. The design resolves this rather than hiding it.
+
+Consent grants and revocations are published to the event backbone and projected into a
+**cloud-local consent store**, so the request path does not traverse the private link. Revocation
+propagates as an event, p95 within 30 seconds. The projection carries a heartbeat, and Open
+Banking serves only while that heartbeat is **under five minutes old**. Past that bound the
+projection can no longer be trusted to know about a revocation, and the API **fails closed** with
+`503` — not `403`, because the consent is unknown rather than absent.
+
+That makes the trade explicit. Open Banking availability is cloud-side, and therefore 99.999%,
+*for any private-link disruption shorter than five minutes*. A longer disruption stops Open
+Banking, and that downtime counts against SLI-5. The alternative — serving on a stale consent
+projection — would trade a compliance breach for an availability number, which is not a trade
+this design is willing to make. Whether the link's real outage profile fits inside the 5.3-minute
+annual budget cannot be asserted from the brief; it is [OI-14](#8-open-issues), and it is measured,
+not assumed.
 
 **What the design does not claim.** If the intended indicator is SLI-4 — completed money
 movement, end to end — then **the composed figure is 99.998%, which is below the stated
@@ -275,8 +295,10 @@ in this document treats an accepted transfer as a completed financial transactio
 | ID | Requirement | Target |
 |----|-------------|--------|
 | NFR-010 | **Digital platform availability** — SLI-1, SLI-2 and SLI-3 together | **99.999%** — 5.3 min/year |
-| NFR-011 | Read service availability (SLI-2) | 99.999% — no core dependency |
+| NFR-011 | Customer read service availability (SLI-2) | 99.999% — no core dependency |
 | NFR-012 | Transfer-request acceptance and durable acknowledgement (SLI-3) | 99.999% — no core dependency at acceptance; RPO = 0 |
+| NFR-013 | Open Banking read service availability (SLI-5) | 99.999% while the cloud consent projection is fresh; fails closed beyond a 5-minute freshness bound (OI-14) |
+| NFR-014 | Consent revocation propagation to the cloud projection | p95 ≤ 30 s; serving prohibited once the projection heartbeat exceeds 5 min |
 | NFR-020 | **CBS-backed transfer completion** (SLI-4) | 99.998% — composed against the core's stated 99.999%, under an independence assumption (≈ 10.5 min/year) |
 | NFR-021 | Transfer completion integrity | 100% of accepted transfers shall ultimately post as a CBS transaction or be explicitly rejected; none shall be lost, and none shall be reported complete before it posts |
 | NFR-025 | Availability reporting | Each indicator shall be measured and reported separately. No blended platform figure shall be published |
@@ -300,7 +322,7 @@ in this document treats an accepted transfer as a completed financial transactio
 | NFR-150 | Real-time fraud verdict latency | p99 ≤ 80 ms, hard timeout at 100 ms |
 | NFR-160 | Sustained read throughput, year 3 | 1,100 requests/s at peak |
 | NFR-170 | Sustained transfer throughput, year 3 | 80 transfers/s at peak |
-| NFR-180 | Change data capture lag, DB2 to read model | p95 ≤ 5 s, p99 ≤ 30 s |
+| NFR-180 | Change data capture lag, DB2 and SQL Server to read model | p95 ≤ 5 s, p99 ≤ 30 s |
 | NFR-190 | Horizontal scalability | The read tier shall scale out without redeployment or schema change |
 | NFR-200 | Core Banking System operations consumed by digital channels | ≤ 1.2 × the count of customer-initiated money movements |
 
@@ -316,9 +338,11 @@ construction, any design in which a customer opening the app causes a mainframe 
 | NFR-230 | Third-party provider authentication | OAuth 2.0 with a financial-grade API profile and certificate-bound tokens |
 | NFR-240 | Data in transit | TLS 1.3 externally; mutual TLS internally, including the cloud-to-on-premises link |
 | NFR-250 | Data at rest | AES-256 everywhere, with a per-customer data encryption key for personal data |
+| NFR-255 | Personal data in new stores | The PII Vault shall be the only store built by this programme that holds raw personal data; every other new store shall identify the customer by token |
 | NFR-260 | Personal data residency | All personal data shall remain within the bank's regulatory region |
-| NFR-270 | Erasure | Erasure shall take effect across every derived store, cache, backup and analytics copy |
-| NFR-280 | Legacy segregation | The Core Banking System shall be reachable from exactly one component, in one network zone, under quota |
+| NFR-270 | Erasure | Erasure shall take effect across every store this programme builds, and shall be requested of each legacy system of record through its own retention process |
+| NFR-280 | Legacy segregation — command path | The Core Banking System shall accept transactions from exactly one component, in one network zone, under quota |
+| NFR-285 | Legacy segregation — capture path | Change data capture adapters shall hold read-only access to source-system change logs only, shall expose no service-callable interface, and shall issue no transaction or business query |
 | NFR-290 | Overload protection | Rate limiting and quota enforcement at every ingress, per identity and per third party |
 | NFR-300 | Audit | Every money movement, consent change, fraud verdict and erasure shall be recorded immutably |
 | NFR-310 | Personal data in telemetry | Logs, traces, metrics and event payloads shall contain no raw personal data |
@@ -340,7 +364,7 @@ construction, any design in which a customer opening the app causes a mainframe 
 | NFR-370 | Deployment of a cloud or on-premises service | Rolling, zero downtime, no request loss |
 | NFR-380 | Deployment frequency | Any service shall be deployable at least daily, independently of every other |
 | NFR-390 | Rollback | Any release shall be revertible within 15 minutes without data migration |
-| NFR-400 | Anti-corruption layer deployment | Blue/green, because it is the only path to the ledger |
+| NFR-400 | Anti-corruption layer deployment | Blue/green, because it is the only write path to the ledger |
 | NFR-410 | Time from merge to production | ≤ 1 working day for a non-ledger service |
 | NFR-415 | **Time to launch a new digital application or service** | **≤ 6 weeks** from approved requirement to production, using the paved-road pipeline, shared identity, shared observability and the existing read model, with no new infrastructure provisioning |
 
@@ -380,7 +404,8 @@ The platform is built as four zones with strictly controlled traffic between the
 | **Cloud — public edge** | CDN, WAF, API gateway, load balancer | Elastic, internet-facing, absorbs volume and attack traffic before it reaches anything stateful |
 | **Cloud — private services** | Mobile/web BFF, Account & Balance API, Reporting, Open Banking API, Notification, AI Advisor, offline fraud analytics, observability | Read-heavy, spiky, benefits from elasticity; none of it is on the money path |
 | **On-premises — regulated services** | Anti-corruption layer, Transfer Orchestrator, real-time Fraud Scoring, Consent & Identity master, Customer PII Vault, CDC producers, event backbone | Ledger-adjacent, latency-critical next to the core, or legally required to stay in the bank's own data centre |
-| **On-premises — core** | COBOL CBS on z/OS, DB2, ADABAS | Unchanged. Reachable from exactly one component |
+| **On-premises — core** | COBOL CBS on z/OS, DB2, ADABAS | Unchanged. Transactions accepted from the ACL alone; change logs read by dedicated capture adapters (NFR-280, NFR-285) |
+| **On-premises — SQL Server estate** | The third source system, off the mainframe | Unchanged. Feeds the same ingestion tier; its authoritative domain is not stated by the brief (A-18, OI-10) |
 
 Three diagrams carry the structure. The [C4 Context diagram](diagrams.md#1-c4-context) shows who
 uses the platform and what it depends on, and the [C4 Container
@@ -399,10 +424,11 @@ and its cache, and the mainframe is never touched. If it is a **write** — a tr
 crosses the private link to the on-premises Transfer Orchestrator, which scores it for fraud in
 line, submits it to the anti-corruption layer as a single Core Banking System transaction, and
 writes the confirmed result straight back into the read model so the customer sees their own
-action immediately. Independently and continuously, change data capture on DB2 and ADABAS
-publishes every committed change to an event backbone; consumers project those events into the
-read model, the analytics lake and the offline fraud pipeline. The read model is therefore
-never authoritative and always rebuildable, and the ledger is never bypassed.
+action immediately. Independently and continuously, change data capture on all three source
+systems — DB2, ADABAS and SQL Server — publishes every committed change to an event backbone;
+consumers project those events into the read model, the analytics lake and the offline fraud
+pipeline. The read model is therefore never authoritative and always rebuildable, and the ledger
+is never bypassed.
 
 ### 3.1.2 Component responsibilities
 
@@ -418,9 +444,9 @@ never authoritative and always rebuildable, and the ledger is never bypassed.
 | Offline Fraud Pipeline | Stream and batch scoring over the full history (FR-110) | Cloud |
 | Transfer Orchestrator | Owns the transfer SAGA: validate, score, submit, confirm, compensate | On-premises |
 | Real-time Fraud Scorer | Sub-80 ms verdict on the money path (FR-100, NFR-150) | On-premises |
-| Anti-corruption layer | The only component that speaks to the CBS; translates domain commands to CBS transactions | On-premises |
+| Anti-corruption layer | The only component that transacts with the CBS; translates domain commands to CBS transactions | On-premises |
 | Consent & Identity | Customer authentication, consents, TPP registration | On-premises |
-| Customer PII Vault | The only store of raw personal data; issues customer tokens; holds per-customer DEKs | On-premises |
+| Customer PII Vault | The digital platform's only store of raw personal data; issues customer tokens; holds per-customer DEKs | On-premises |
 | CDC Producers | Log-based capture from DB2 and SQL Server; event replication from ADABAS | On-premises |
 | Event Backbone | Ordered, replayable log; on-premises cluster mirrored to cloud | Both |
 | Read Model | Query-optimised projection of accounts, balances, transactions and categorised spend | Cloud |
@@ -434,24 +460,41 @@ proposed change that breaks one is a change to the architecture, not to an imple
 transaction. No other component computes, stores or adjusts an authoritative balance.
 *(FR-070, C-01. See [D3](decisions.md#d3--mainframe-integration-strategy).)*
 
-**P2 — Never read money from the core.** Customer reads are served from derived read models.
-The core is a write-path resource, not a query service. This is what makes NFR-130 and NFR-200
-simultaneously achievable.
+**P2 — No customer request queries the core.** Every synchronous read a customer or a
+third-party provider makes is served from a derived read model. The core is a write-path
+resource, not a query service. Change data capture still observes committed changes on the
+source systems' logs — that is how the read models exist — but it is an asynchronous pipeline,
+not a request-time query, and it adds no per-request mainframe operation. This is what makes
+NFR-130 and NFR-200 simultaneously achievable.
 *(NFR-130, NFR-200. See [D5](decisions.md#d5--serving-fast-low-cost-reads).)*
 
-**P3 — Talk to the core only through the anti-corruption layer.** No service anywhere knows
-COBOL, DB2, ADABAS, CICS or MQ. The ACL publishes a domain contract and absorbs every legacy
-detail behind it. Segregation and cost control both depend on this being absolute.
-*(NFR-280, C-03. See [D3](decisions.md#d3--mainframe-integration-strategy).)*
+**P3 — The anti-corruption layer is the only transactional path to the core.** Two kinds of
+access to the legacy estate exist, and the distinction is load-bearing:
+
+- **Command path — exclusive.** Every CBS transaction goes through the ACL and nothing else. No
+  business service issues a core transaction or an operational query against DB2 or ADABAS. The
+  ACL publishes a domain contract and absorbs every legacy detail behind it; no service anywhere
+  knows COBOL, CICS or MQ.
+- **Capture path — read-only, dedicated.** Change data capture adapters hold read access to the
+  source systems' change logs, scoped to that purpose. They observe committed changes and
+  publish events. They issue no transactions, no business queries, and expose no interface a
+  service could call.
+
+The capture path must not become a second integration route. An adapter that grew the ability to
+answer a service's query would be a breach of this rule, not an optimisation of it.
+*(NFR-280, NFR-285, C-03. See [D3](decisions.md#d3--mainframe-integration-strategy), [D4](decisions.md#d4--source-system-data-ingestion-approach).)*
 
 **P4 — Corrections are new transactions.** A posted entry is immutable. Fraud reversal,
 operational error and dispute resolution all produce a compensating transaction with a
 reference to the original.
 *(FR-125, NFR-300. See [D7](decisions.md#d7--fraud-detection-architecture).)*
 
-**P5 — Personal data lives in one vault and travels as a token.** No ledger entry, read model
-row, event payload, log line, metric or model prompt contains raw PII. Everything carries an
-opaque `customer_token`.
+**P5 — Personal data enters the digital platform once, and travels as a token.** ADABAS remains
+the customer master and continues to hold personal data in its authoritative role; the design
+does not change that. What the design does control is everything it builds: the PII Vault is the
+only **new** store permitted to hold raw personal data, and no ledger entry, read model row,
+event payload, log line, metric or model prompt carries it. Everything downstream identifies the
+customer by an opaque `customer_token`.
 *(NFR-250, NFR-310, FR-210, FR-240. See [D10](decisions.md#d10--gdpr-erasure-against-a-legally-immutable-ledger).)*
 
 **P6 — Every boundary is a versioned contract.** APIs and event schemas evolve
@@ -531,10 +574,17 @@ the original and the reversal visible.
 
 A TPP authenticates with OAuth 2.0 client credentials and a certificate-bound token, presents a
 consent reference, and is served from the read model through a dedicated ingress and dedicated
-read replicas. Consent is validated against the on-premises Consent service on every request
-(short-TTL cached). Per-TPP quotas are enforced at the gateway. TPP traffic cannot touch the
-core and cannot exhaust the capacity serving the bank's own customers — the replica separation
-is a bulkhead, not an optimisation.
+read replicas. Per-TPP quotas are enforced at the gateway. TPP traffic cannot touch the core and
+cannot exhaust the capacity serving the bank's own customers — the replica separation is a
+bulkhead, not an optimisation.
+
+**Consent on the request path.** Consent is owned on-premises but *validated in the cloud*.
+Grants and revocations are published to the event backbone and projected into a cloud-local
+consent store, so a request does not cross the private link to be authorised. The projection
+carries a heartbeat; a request is served only while that heartbeat is under five minutes old
+(NFR-014). Beyond it the API fails closed with `503`, because a projection that may have missed a
+revocation cannot be used to authorise disclosure. This is why Open Banking is reported as its own
+indicator, SLI-5, rather than folded into the customer read service (§2.2.1).
 
 ### 3.3.5 AI advisor consultation — FR-190–FR-210
 
@@ -551,15 +601,25 @@ prompt with a few hundred tokens of summary (§3.9.4).
 ### 3.3.6 GDPR erasure — FR-240, NFR-270
 
 Erasure cannot mean deleting ledger rows: financial records carry a statutory retention period.
-The design separates the two obligations. On an erasure request the platform deletes the vault
-record and **destroys the customer's data encryption key**. Every derived copy — read model,
-cache, event log, analytics lake, backups, the advisor's digest — is encrypted under that key
-and becomes permanently unreadable. Compacted event-log topics receive a tombstone. The ledger
-retains its legally required financial record, now bearing only a `customer_token` that resolves
-to nothing.
+The design separates the obligations, and separates what it can do itself from what it must ask
+of the legacy estate.
 
-This satisfies erasure while preserving the audit trail. It requires legal sign-off; see
-[Open Issue OI-02](#8-open-issues) and [D10](decisions.md#d10--gdpr-erasure-against-a-legally-immutable-ledger).
+**Within the digital platform — immediate.** The platform deletes the vault record and
+**destroys the customer's data encryption key**. Every derived copy — read model, cache, event
+log, analytics lake, backups, the advisor's digest — is encrypted under that key and becomes
+permanently unreadable at the same instant. Compacted event-log topics receive a tombstone. The
+ledger's own record is retained, now bearing only a `customer_token` that resolves to nothing.
+
+**Within the legacy estate — a tracked request.** ADABAS holds the customer master and was not
+written under the platform's keys, so key destruction does not reach it. The workflow raises an
+erasure request against the customer master's retention process, and against SQL Server if
+[OI-10](#8-open-issues) establishes that it holds customer-identifiable data. The workflow tracks
+each request to an outcome and records it; it does not report the erasure complete until every
+addressed system has answered.
+
+The full breakdown by store, and what is deliberately retained, is in §3.5.7. The approach
+requires legal sign-off; see [Open Issue OI-02](#8-open-issues) and
+[D10](decisions.md#d10--gdpr-erasure-against-a-legally-immutable-ledger).
 
 ## 3.4 Message Schemas
 
@@ -595,11 +655,11 @@ registry under `BACKWARD` compatibility (NFR-320), and identify the customer onl
 | `source_account` | string | Account reference the caller is authorised for |
 | `destination` | object | `{ scheme: "internal" \| "external", account, bank_id? }` |
 | `amount` | object | `{ value: integer minor units, currency: ISO 4217 }` — never floating point |
-| `reference` | string | Free-text, ≤ 140 chars, sanitised |
-| `initiated_at` | ISO 8601 | Client clock, advisory only |
 
 Response `202 Accepted` carries `transfer_id`, `status`, and `estimated_completion`. Status is
 one of `ACCEPTED`, `SCORING`, `POSTED`, `REJECTED_FRAUD`, `REJECTED_FUNDS`, `REVERSED`, `FAILED`.
+The `202` matters more than the field list: acceptance and completion are different events, and
+the contract says so at the first response rather than implying that a transfer is done.
 
 ### 3.4.3 Core transaction request — ACL to CBS
 
@@ -635,11 +695,12 @@ entitled to an explanation, and a regulator is entitled to an audit trail of why
 
 ### 3.4.5 Read API contract
 
-`GET /v1/accounts/{id}/balance` and `GET /v1/accounts/{id}/transactions?from=&to=&cursor=`
-return `as_of` and `freshness_seconds` on every response. The client renders this: a customer
-looking at a number that may be up to 24 hours stale for externally originated credits (NFR-080)
-must be able to see when it was last known good. Making staleness explicit in the contract is
-what allows the 24-hour allowance to be used honestly rather than silently.
+The balance and transaction-history resources are cursor-paginated reads, and every response
+carries `as_of` and `freshness_seconds`. That pair is the architectural part. A customer looking
+at a number that may be up to 24 hours stale for externally originated credits (NFR-080) must be
+able to see when it was last known good, so staleness is a field in the contract rather than an
+assumption in the client. It is what allows the 24-hour allowance to be used honestly rather than
+silently.
 
 ## 3.5 Data Architecture
 
@@ -650,20 +711,26 @@ Drawn in [Diagrams §4](diagrams.md#4-data-architecture).
 The single most important statement in this section is which stores are authoritative and which
 are not.
 
-| Store | Role | Authoritative for | Rebuildable |
-|-------|------|-------------------|-------------|
-| DB2 (mainframe) | System of record | Every posted transaction and balance | No — this is the ledger |
-| ADABAS (mainframe) | System of record | Customer master attributes | No |
-| SQL Server (distributed) | System of record | Its own domain — not specified by the brief (A-18, OI-10) | No |
-| Transfer Orchestrator store (on-prem) | System of record | In-flight transfer state before posting | No — protected by RPO 0 |
-| Customer PII Vault (on-prem) | System of record | Raw personal data and per-customer keys | No |
-| Event backbone (Kafka) | Durable event log | The ordered history of changes | No, but replicated ×3 |
-| Read model (Aurora PostgreSQL) | Derived projection | Nothing | Yes, from the log |
-| Cache (Redis) | Derived | Nothing | Yes |
-| Analytics lake (S3) | Derived | Nothing | Yes |
+| Store | Role | Authoritative for | Holds raw PII | Rebuildable |
+|-------|------|-------------------|---------------|-------------|
+| DB2 (mainframe) | Legacy system of record | Every posted transaction and balance | Account-linked data as the ledger requires | No — this is the ledger |
+| ADABAS (mainframe) | Legacy system of record | Customer master attributes | **Yes — this is the customer master** | No |
+| SQL Server (distributed) | Legacy system of record | Its own domain — not specified by the brief (A-18, OI-10) | Unknown — see OI-10 | No |
+| Transfer Orchestrator store (on-prem) | New — system of record | In-flight transfer state before posting | No — token only | No — protected by RPO 0 |
+| Customer PII Vault (on-prem) | New — system of record | The digital platform's copy of personal data, and per-customer keys | Yes — by design, and alone among new stores | No |
+| Event backbone (Kafka) | New — durable event log | The ordered history of changes | No — token only | No, but replicated ×3 |
+| Read model (Aurora PostgreSQL) | New — derived projection | Nothing | No — token only | Yes, from the log |
+| Cache (Redis) | New — derived | Nothing | No — token only | Yes |
+| Analytics lake (S3) | New — derived | Nothing | No — token only | Yes |
 
-Everything in the bottom half can be deleted and rebuilt. That property is what makes the read
-path safe to optimise aggressively, and it is why the log — not the read model — is the thing
+Two separate statements are being made here, and conflating them would be wrong. Among the
+**stores this programme builds**, exactly one holds raw personal data: the PII Vault. Across the
+**bank as a whole**, personal data also remains in the legacy systems of record, because that is
+their authoritative role and this design does not migrate them. ADABAS is the customer-information
+database and continues to be exactly that.
+
+Every derived store in the lower half can be deleted and rebuilt. That property is what makes the
+read path safe to optimise aggressively, and it is why the log — not the read model — is the thing
 that must never be lost.
 
 ### 3.5.2 Ingestion from the source systems
@@ -768,22 +835,53 @@ exceeding 10 TB. Year three reaches neither.
 
 ### 3.5.7 Erasure across every store
 
-Erasure is a data-architecture problem, not a compliance checkbox, because the data has been
-copied into six places by design. The mechanism (§3.3.6) is crypto-shredding:
+Erasure is a data-architecture problem, not a compliance checkbox, because personal data exists
+in more than one place and the places do not obey the same mechanism. Three categories have to be
+separated, or the design will claim something it cannot do.
+
+**1. Stores this programme builds.** Crypto-shredding reaches all of them at once (§3.3.6). Each
+customer's personal data is encrypted under a per-customer key held in the vault; destroying the
+key renders every copy unreadable simultaneously, including copies on offline media.
 
 | Store | What happens on erasure |
 |-------|-------------------------|
 | PII Vault | Record deleted; the customer's data encryption key is destroyed |
-| Read model | PII columns unreadable; row retained under `customer_token` |
+| Read model | PII fields unreadable; row retained under `customer_token` |
 | Cache | Keys evicted immediately on the erasure event |
 | Event backbone | Tombstone published to compacted topics; payloads unreadable |
 | Analytics lake | Unreadable; partitions rewritten on the next compaction cycle |
-| Backups | Unreadable — no backup restore or re-import can resurrect the data |
-| CBS ledger | Financial record retained in pseudonymous form, as law requires |
+| Advisor spend digest | Deleted outright, and unreadable in any backup of it |
+| Telemetry — logs, traces, metrics | Nothing to erase; these never carried personal data (NFR-310) |
+| Backups of any of the above | Unreadable — no restore or re-import can resurrect the data |
 
-Encrypting each customer's data under its own key is the only mechanism that reaches backups
-and archives. Row-level deletion cannot, and any design that claims otherwise is claiming
-something it cannot deliver.
+**2. Legacy systems of record.** Crypto-shredding does **not** reach these. Their data was not
+written under the platform's keys, and the platform has no authority to delete from them. Erasure
+is therefore a *request into each system's own retention process*, tracked to completion by the
+erasure workflow rather than performed by it.
+
+| System | What erasure means there |
+|--------|--------------------------|
+| ADABAS — customer master | Erasure request raised against the customer master's own retention process. Attributes not under statutory retention are deleted or pseudonymised by that process; the platform records the outcome. This is a legacy-side change with its own lead time, and it is a dependency, not something this architecture performs |
+| DB2 — ledger | Financial records are retained. Statutory retention overrides the erasure right for transaction records, and the design does not attempt to delete them |
+| SQL Server | Treated the same way as ADABAS **if** it proves to hold customer-identifiable data. Whether it does is [OI-10](#8-open-issues); the erasure workflow includes it conditionally rather than assuming either answer |
+
+**3. What is retained, and why.** The financial record survives in pseudonymous form: the ledger
+entry remains, the token on it resolves to nothing, and the person is no longer identifiable from
+the platform's side. That is the intended end state where retention and erasure conflict.
+
+| Category | Treatment | Basis |
+|----------|-----------|-------|
+| Derived personal data in new stores | Erased, by key destruction | No independent retention obligation |
+| Advisory and analytics derivations | Erased, by key destruction | No independent retention obligation |
+| Financial transaction records | Retained, pseudonymised | Statutory retention (C-05) |
+| Audit records — consent, fraud verdicts, erasure itself | Retained, pseudonymised | Regulatory obligation; the erasure event must itself be auditable |
+| Legacy customer master attributes | Referred to the legacy retention process | Outside this platform's control |
+
+The honest summary: this design can guarantee that **the digital platform** holds no readable
+personal data for an erased customer, immediately and including its backups. It cannot
+unilaterally guarantee the same of the mainframe estate, and it does not claim to. Closing that
+second half is a legacy-side workstream, dependent on counsel's position ([OI-02](#8-open-issues))
+and on what the customer master's retention process permits.
 
 ## 3.6 Security Architecture
 
@@ -812,11 +910,18 @@ is mutually authenticated TLS regardless of the link being private.
 |------|----------|
 | DMZ | Link termination, reverse proxies, inbound inspection |
 | Application | Transfer Orchestrator, fraud scorer, consent, event backbone |
-| Core | ACL, hardware security modules, and the mainframe itself |
+| Core | ACL, change data capture adapters, hardware security modules, and the mainframe itself |
 
-The core zone accepts exactly one inbound path: from the ACL, on the mainframe's message
-channel, with a whitelisted source, its own credentials and its own quota. No human and no
-other service reaches the mainframe from the digital platform (NFR-280).
+Two paths enter the core zone, and the firewall policy distinguishes them explicitly:
+
+| Path | Component | Direction and rights | Governed by |
+|------|-----------|----------------------|-------------|
+| **Command** | Anti-corruption layer | Submits CBS transactions on the mainframe's message channel; whitelisted source, own credentials, own quota | NFR-280 |
+| **Capture** | CDC adapters — one per source | Read-only subscription to a change log. No transaction, no business query, no service-callable interface | NFR-285 |
+
+No other service in the estate reaches the mainframe by either path, and no service can reach the
+capture adapters at all — they are producers onto the event backbone, not servers. A business
+service that needed legacy data would have to go through the ACL, which is the point.
 
 ### 3.6.2 Identity
 
@@ -872,7 +977,7 @@ NFR-460).
 | Concern | Approach |
 |---------|----------|
 | Stateless cloud and on-premises services | Rolling update, surge 25%, unavailable 0, readiness-gated, connections drained (NFR-370) |
-| Anti-corruption layer | Blue/green with an explicit cut-over, because it is the only path to the ledger (NFR-400) |
+| Anti-corruption layer | Blue/green with an explicit cut-over, because it is the only write path to the ledger (NFR-400) |
 | Read-model schema | Expand and contract: add and backfill, deploy code reading both shapes, then remove. No release requires simultaneous code and schema cut-over (NFR-350) |
 | Event schemas | Registered, `BACKWARD` compatibility enforced at publish time. Adding an optional field is free; removing or retyping one is rejected by the registry, not discovered in production (NFR-320) |
 | Public APIs | Major version in the path; additive minor changes only within a major; 12-month support window after a successor ships (NFR-330, NFR-340) |
@@ -969,7 +1074,7 @@ precisely why every other hop is kept tight and why the fraud check has a hard 1
 | Cache | Cluster mode, sharded by account key; capacity added by adding shards |
 | Event backbone | Scale by partition count; consumer groups scale to partition count |
 | Write path | **Not scaled out.** Throughput toward the core is capped by a token bucket sized to agreed mainframe capacity. Excess is queued, never dropped, and surfaced to the customer as pending |
-| On-premises tier | Fixed capacity, sized for year-three peak from day one, because it cannot autoscale |
+| On-premises tier | Fixed capacity — it cannot autoscale. Sized for the MVP with headroom and incremented in Year 2, not provisioned for Year-3 peak on day one (§1.1.4) |
 
 The asymmetry is the point. Scaling the read path is cheap and safe. Scaling the write path
 means buying mainframe capacity, so the architecture throttles instead.
@@ -1000,8 +1105,8 @@ means buying mainframe capacity, so the architecture throttles instead.
 | Event backbone storage | 30 GB | 300 GB | 30-day retention, replication factor 3 |
 | Object storage | 250 GB | 2.5 TB | Lifecycle-tiered |
 | Private link | 2 × 1 Gbps | 2 × 1 Gbps | Diverse paths; sized for CDC plus write traffic, not for reads |
-| On-premises servers | 20 | 20 | 12 production, 8 disaster recovery; sized for year 3 on day one |
-| On-premises storage | 120 TB usable | 120 TB usable | RAID 6, replicated between sites |
+| On-premises servers | 12 | 20 | 8 production + 4 disaster recovery at MVP, rising to 12 + 8 (§3.8.7) |
+| On-premises storage | 40 TB usable | 120 TB usable | RAID 6, replicated between sites |
 
 ### 3.8.7 On-premises hardware and software
 
@@ -1061,21 +1166,31 @@ a unit cost the brief does not supply.
 |---|---|
 | **Method** | Bottom-up, following the AWS Pricing Calculator's own structure: each component is sized in §3.8.6 from the capacity model in §3.8.1, then priced against its cost driver — instance-hours, requests, GB stored, GB transferred, tokens |
 | **Region** | Europe (Frankfurt), `eu-central-1` — single region, chosen for data residency (NFR-260, D6) |
-| **Rate basis** | AWS on-demand list rates. No committed-use discount, no enterprise agreement, no free tier |
-| **Priced as of** | **28 August 2026** |
-| **Currency** | **USD throughout** |
+| **Rate basis** | AWS on-demand list rates, **assumed** — see the verification status below. No committed-use discount, no enterprise agreement, no free tier |
+| **Rate assumptions modelled as of** | **28 August 2026** — the date the assumptions were set, not a date on which a rate card was verified |
+| **Currency** | **USD throughout.** No other currency appears in this document |
 | **Services priced** | EKS, EC2 (M-family general purpose), Application Load Balancer, API Gateway, Aurora PostgreSQL, ElastiCache, MSK, S3 with lifecycle tiering, Direct Connect and data transfer, CloudWatch and OpenSearch, SageMaker, Bedrock, KMS, Secrets Manager, WAF, GuardDuty |
 | **Confidence** | **±30%** at line level; better at the level of which line dominates |
 
 **Verification status — read this before using the figures.** These are **modelled estimates,
-not a calculator export.** An attempt was made on the pricing date above to reconstruct the
-model against published AWS rates. It partially succeeded: `m6i.large` on-demand was confirmed at
-**$0.096/hour** against a public pricing reference, which corroborates the order of magnitude of
-the compute lines. It did not fully succeed: AWS publishes regional rates through
-JavaScript-rendered pages and a bulk price-list API that could not be retrieved in full, so
-**`eu-central-1`-specific rates for every service were not independently confirmed.** Frankfurt
-typically carries a premium over US regions, which the model reflects but which remains
-unverified line by line.
+not a calculator export.** The AWS Pricing Calculator was **not** used to produce or validate
+them. An attempt was made on the date above to reconstruct the model against published AWS rates.
+It partially succeeded: `m6i.large` on-demand was corroborated at **$0.096/hour** against a public
+pricing reference, which supports the order of magnitude of the compute lines. It did not fully
+succeed: AWS publishes regional rates through JavaScript-rendered pages and a bulk price-list API
+that could not be retrieved in full, so **`eu-central-1`-specific rates for every service were not
+independently confirmed.** Frankfurt typically carries a premium over US regions, which the model
+reflects but which remains unverified line by line.
+
+Every monetary input in §3.9 therefore falls into one of four classes, and each table below is
+readable against this key:
+
+| Class | Meaning | Where it appears |
+|-------|---------|------------------|
+| **Sourced** | Taken from the brief and not open to question | 60 developers, 5 COBOL, 1M customers, 100K year-1 users, 12-month MVP |
+| **Corroborated** | Checked against a public external reference on the date above | `m6i.large` at $0.096/hour — the single rate that was confirmed |
+| **Assumed** | Set by the architect from experience and stated as an assumption; not verified | Every other AWS unit rate; the model token rates (§3.9.4); on-premises hardware prices and the 36-month amortisation (§3.9.3); the mainframe per-operation charge (§3.9.7, A-14); the advisor engagement rate (A-16) |
+| **Derived** | Computed from the sized capacity model and the classes above | Every subtotal and total: §3.9.2, §3.9.3, §3.9.4, §3.9.5, and the volume reduction in §3.9.6 |
 
 [OI-12](#8-open-issues) therefore stays open, with a specific action: rebuild this model inside
 the AWS Pricing Calculator, export the estimate, and attach it. Nothing below should reach a
@@ -1104,7 +1219,7 @@ a current rate card without touching the architecture.
 | Disaster recovery environment | Warm standby, ~30% of production | $1,150 | $4,300 |
 | **Cloud infrastructure subtotal** | | **$4,920** | **$18,589** |
 | AI advisor inference | Tokens — see §3.9.4 | $996 | $9,960 |
-| **Cloud total** | | **≈ $5,920** | **≈ $28,550** |
+| **Cloud total** | | **$5,916** | **$28,549** |
 
 The advisor is listed separately because it is priced per token rather than per resource-hour,
 and because at Year-3 volume it is **35% of the entire cloud bill** — the single largest line,
@@ -1123,7 +1238,7 @@ one (§1.1.4).
 | Network, firewalls, load balancers, 2 hardware security modules ($120K capex) | $3,333 | $3,333 |
 | Data centre space, power and cooling, two sites | $2,400 | $3,200 |
 | Software — operating system, container platform, event backbone support, CDC tooling for three sources | $5,200 | $6,500 |
-| **On-premises total** | **≈ $17,540** | **≈ $25,810** |
+| **On-premises total** | **$17,544** | **$25,811** |
 
 On-premises cost is the **largest single line in Year 1** and it does not fall when usage is low
 — capacity must be bought before it is needed, and it cannot autoscale. That asymmetry against
@@ -1171,10 +1286,10 @@ This is the answer to "minimise storage and processing budget, present your calc
 |---|-----------:|--------------:|
 | Cloud infrastructure | $4,920 | $18,589 |
 | AI advisor inference | $996 | $9,960 |
-| On-premises infrastructure (amortised) | $17,540 | $25,810 |
-| **Total per month** | **≈ $23,460** | **≈ $54,360** |
-| **Total per year** | **≈ $281,500** | **≈ $652,300** |
-| Cost per digital user per year | ≈ $2.82 | ≈ $0.65 |
+| On-premises infrastructure (amortised) | $17,544 | $25,811 |
+| **Total per month** | **$23,460** | **$54,360** |
+| **Total per year** | **$281,520** | **$652,320** |
+| Cost per digital user per year | $2.82 | $0.65 |
 
 Cost per user falls by 77% between the stages, which is the operating leverage the architecture
 exists to produce: the on-premises component is broadly fixed, the cloud component scales
@@ -1304,8 +1419,8 @@ growth, not new construction, and is set out in §1.1.4; the sequencing is in §
 | Developers | 60 | C-07: 5 COBOL, 55 mostly Java/AWS |
 | Weekdays per year | 260 | |
 | Less annual leave, public holidays, training | 25 + 11 + 5 | |
-| **Productive days per developer per year** | **219** | |
-| **Productive days per developer-month** | **18** | 219 ÷ 12 |
+| **Productive days per developer per year** | **219** | 260 − 25 − 11 − 5 |
+| **Planning days per developer-month** | **18** | 219 ÷ 12 = 18.25, **rounded down to 18** |
 | Organisational capacity | **12,960 dev-days** | 60 × 12 × 18 |
 | **Planned MVP effort** | **7,980 dev-days** | §5.2 |
 | Peak concurrent headcount | **57 of 60** | §5.3 — 3 held as floating reserve |
@@ -1365,7 +1480,7 @@ waiting on 5.
 | L-02 | Read-your-writes depends on the write-through path | If write-through fails after a successful posting, the customer's own transfer appears only when the CDC event lands — seconds, not milliseconds. The response is still correct; the cached view lags |
 | L-03 | Five nines covers the platform, not ledger posting | 99.999% is committed for SLI-1 to SLI-3 (NFR-010). Completion additionally depends on the Core Banking System and composes to 99.998% (NFR-020) — roughly 10.5 minutes a year in which a transfer is accepted and pending rather than posted. Measured against completion the design is 0.001% short of the stated requirement, and §2.2.1 says so. The composition also assumes independent failure domains, which two systems sharing a site and an operations team do not strictly have |
 | L-04 | Single region | A region-wide cloud failure leaves the on-premises estate and disaster recovery site serving reduced digital function. Multi-region was rejected on cost and data-residency grounds ([D6](decisions.md#d6--cloud-platform-and-region-strategy)) |
-| L-05 | On-premises capacity is fixed | It is bought for year-three peak on day one and cannot flex. This is why only genuinely regulated workloads are placed there |
+| L-05 | On-premises capacity cannot flex | It is bought ahead of need and cannot autoscale. The estate is staged — MVP size with headroom, incremented in Year 2 (§1.1.4) — which limits the exposure but does not remove it. This is why only genuinely regulated workloads are placed there |
 | L-06 | Fraud reversal is visible to the customer | A transfer caught by the offline process after posting is reversed by a compensating entry (P4). The customer sees both postings. This is a consequence of an immutable ledger and is the correct behaviour, but it is not invisible |
 | L-07 | The AI advisor sees a summary, not the ledger | It reasons over a tokenised spend digest, so it cannot answer questions requiring raw transaction detail or real-time balances beyond what the digest carries |
 | L-08 | Branch, ATM and teller load is unchanged | This programme reduces mainframe operations from digital channels only. Existing channel load is out of scope and excluded from §3.9 |
@@ -1409,3 +1524,4 @@ waiting on 5.
 | OI-11 | Confirm the reading of the cloud-only wording for the AI agent (A-19) | The alternative reading would force every cloud service on-premises | Clarify with the business sponsor | Architecture | Month 1 |
 | OI-12 | Cloud cost model not verified line by line against a dated AWS rate card | §3.9 uses modelled `eu-central-1` list-price estimates at ±30%. One rate was corroborated externally (`m6i.large` at $0.096/hour, 28 Aug 2026); the rest were not, because AWS publishes regional rates through JavaScript-rendered pages and a bulk API that could not be retrieved in full | Rebuild the model in the AWS Pricing Calculator, export the estimate, attach it, and restate §3.9.2 against it | Architecture + Finance | Month 2, before any budget submission |
 | OI-13 | The service-level indicator for the 99.999% requirement is not defined in the brief | Determines whether the platform meets the requirement (SLI-1 to SLI-3) or falls 0.001% short of it (SLI-4). §2.2.1 states both rather than choosing silently | Confirm the intended measurement boundary with the business sponsor and the regulator-facing risk function | Architecture + Risk | Month 1 |
+| OI-14 | Private-link outage profile against the Open Banking consent-freshness bound | SLI-5 is committed at 99.999% only while link disruptions stay under the five-minute bound (NFR-013). Whether they do cannot be asserted from the brief | Obtain historical link availability from network operations; measure in phase 0 and restate the bound or the commitment | Platform + Network ops | Month 3 |

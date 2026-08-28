@@ -18,9 +18,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { marked } from "marked";
 import {
-  AlignmentType, BorderStyle, Bookmark, Document, ExternalHyperlink, HeadingLevel,
-  ImageRun, InternalHyperlink, LevelFormat, Packer, PageBreak, Paragraph, ShadingType,
-  Table, TableCell, TableRow, TextRun, WidthType,
+  AlignmentType, BorderStyle, Bookmark, Document, ExternalHyperlink, Footer, HeadingLevel,
+  ImageRun, InternalHyperlink, LevelFormat, PageBreak, PageNumber, Packer, Paragraph,
+  ShadingType, Table, TableCell, TableOfContents, TableRow, TextRun, WidthType,
 } from "docx";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -197,8 +197,26 @@ function runs(tokens, style = {}) {
   return out;
 }
 
-/** A diagram placeholder becomes an embedded image scaled to the text width. */
-function diagramParagraph(id) {
+/**
+ * A diagram placeholder becomes an embedded image scaled to the text width,
+ * followed by a numbered caption that cannot be separated from it.
+ */
+let figureNumber = 0;
+
+function diagramBlock(id, headingText) {
+  figureNumber += 1;
+  const label = (headingText || "Diagram").replace(/^[\d.]+\s*/, "").trim();
+  const caption = new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 0, after: 200 },
+    children: [
+      new TextRun({ text: `Figure ${figureNumber} — ${label}`, italics: true, size: 18, color: "555555" }),
+    ],
+  });
+  return [diagramParagraph(id, `Figure ${figureNumber}: ${label}`), caption];
+}
+
+function diagramParagraph(id, altText) {
   const buf = images.get(id);
   if (!buf) {
     return new Paragraph({
@@ -213,11 +231,14 @@ function diagramParagraph(id) {
   const fit = Math.min(scale, maxHeight / height);
   return new Paragraph({
     alignment: AlignmentType.CENTER,
-    spacing: { before: 160, after: 160 },
+    spacing: { before: 160, after: 60 },
+    keepNext: true,
+    keepLines: true,
     children: [
       new ImageRun({
         data: buf,
         type: "png",
+        altText: { name: altText, title: altText, description: altText },
         transformation: { width: Math.round(width * fit), height: Math.round(height * fit) },
       }),
     ],
@@ -231,14 +252,37 @@ const cellRuns = (text) => {
 };
 
 function buildTable(token) {
-  const widths = token.header.length;
-  const row = (cells, header) =>
-    new TableRow({
+
+
+  // Columns are shared out by how much text they actually carry, so a narrow
+  // identifier column does not get the same width as a paragraph of rationale.
+  // The floor is the longest single word: below that the column wraps mid-word
+  // and the text stacks one letter per line.
+  const weight = token.header.map((_, i) => {
+    const texts = [token.header[i].text, ...token.rows.map((r) => r[i]?.text ?? "")]
+      .map((t) => t.replace(/[*_`]/g, ""));
+    const mean = texts.reduce((a, t) => a + t.length, 0) / texts.length;
+    const longestWord = Math.max(
+      ...texts.flatMap((t) => t.split(/[\s/—-]+/).map((w) => w.length)),
+      4
+    );
+    return Math.min(48, Math.max(longestWord + 4, Math.sqrt(mean) * 3));
+  });
+  const total = weight.reduce((a, b) => a + b, 0);
+  const pct = weight.map((w) => Math.round((w / total) * 100));
+
+  const row = (cells, header) => {
+    // Keeping a row whole is right until the row is so tall that doing so
+    // strands most of a page. Past that it may break.
+    const bulk = cells.reduce((n, c) => n + (c.text?.length ?? 0), 0);
+    return new TableRow({
+      // The header repeats at the top of every page a long table runs onto.
       tableHeader: header,
+      cantSplit: header || bulk < 520,
       children: cells.map(
-        (c) =>
+        (c, i) =>
           new TableCell({
-            width: { size: Math.floor(100 / widths), type: WidthType.PERCENTAGE },
+            width: { size: pct[i], type: WidthType.PERCENTAGE },
             shading: header ? { type: ShadingType.CLEAR, fill: BAND } : undefined,
             margins: { top: 60, bottom: 60, left: 100, right: 100 },
             children: [
@@ -252,9 +296,12 @@ function buildTable(token) {
           })
       ),
     });
+  };
 
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
+    columnWidths: pct.map((p) => Math.round((CONTENT_TWIP * p) / 100)),
+    layout: "fixed",
     borders: {
       top: { style: BorderStyle.SINGLE, size: 2, color: RULE },
       bottom: { style: BorderStyle.SINGLE, size: 2, color: RULE },
@@ -291,14 +338,24 @@ function listParagraphs(token, depth = 0) {
 /** Markdown tokens to Word block elements. */
 function blocks(md) {
   const out = [];
+  // The contents list in the source is a plain Markdown list. Word can build a
+  // real one from the heading styles, with page numbers, so the field replaces
+  // the list rather than sitting beside it.
+  let dropContentsList = false;
+  let lastHeading = "";
   for (const token of marked.lexer(md)) {
+    if (dropContentsList && token.type === "list") { dropContentsList = false; continue; }
     switch (token.type) {
       case "heading": {
         const clean = token.text.replace(/[*_`]/g, "");
+        lastHeading = clean;
         out.push(
           new Paragraph({
             heading: HEADING[token.depth],
             pageBreakBefore: token.depth === 1,
+            // A heading never sits alone at the foot of a page.
+            keepNext: true,
+            keepLines: true,
             spacing: { before: token.depth === 1 ? 0 : 240, after: 120 },
             border:
               token.depth === 1
@@ -309,11 +366,21 @@ function blocks(md) {
             ],
           })
         );
+        if (/^contents$/i.test(clean)) {
+          out.push(
+            new TableOfContents("Contents", {
+              hyperlink: true,
+              headingStyleRange: "1-3",
+              captionLabel: false,
+            })
+          );
+          dropContentsList = true;
+        }
         break;
       }
       case "paragraph": {
         const hit = token.text.match(/^@@DIAGRAM:([\w-]+)@@$/);
-        if (hit) { out.push(diagramParagraph(hit[1])); break; }
+        if (hit) { out.push(...diagramBlock(hit[1], lastHeading)); break; }
         if (token.text.trim() === "@@PAGEBREAK@@") {
           out.push(new Paragraph({ children: [new PageBreak()] }));
           break;
@@ -384,6 +451,8 @@ const children = blocks(merged);
 
 const doc = new Document({
   creator: AUTHOR,
+  // Word refreshes the contents field and its page numbers when the file opens.
+  features: { updateFields: true },
   lastModifiedBy: AUTHOR,
   title: TITLE,
   description: "High Level Design for the NeoBank Digital Leap programme.",
@@ -422,6 +491,26 @@ const doc = new Document({
           size: { width: PAGE_WIDTH_TWIP, height: 16838 },
           margin: { top: MARGIN_TWIP, right: MARGIN_TWIP, bottom: MARGIN_TWIP, left: MARGIN_TWIP },
         },
+      },
+      // The template puts the document name on the left of the footer and the
+      // page number on the right, and nothing in the header.
+      footers: {
+        default: new Footer({
+          children: [
+            new Paragraph({
+              tabStops: [{ type: "right", position: CONTENT_TWIP }],
+              border: { top: { style: BorderStyle.SINGLE, size: 4, color: RULE, space: 6 } },
+              children: [
+                new TextRun({ text: TITLE, size: 16, color: "666666" }),
+                new TextRun({ text: "\t", size: 16 }),
+                new TextRun({ text: "Page ", size: 16, color: "666666" }),
+                new TextRun({ children: [PageNumber.CURRENT], size: 16, color: "666666" }),
+                new TextRun({ text: " of ", size: 16, color: "666666" }),
+                new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 16, color: "666666" }),
+              ],
+            }),
+          ],
+        }),
       },
       children,
     },
