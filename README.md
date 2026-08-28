@@ -9,7 +9,6 @@ serving a million customers in real time, without putting the ledger at risk.
   <img alt="Domain" src="https://img.shields.io/badge/domain-fintech%20%2F%20banking-6f42c1">
   <img alt="Diagrams" src="https://img.shields.io/badge/diagrams-C4%20%2B%20Mermaid-0aa">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
-  <img alt="Origin" src="https://img.shields.io/badge/origin-course%20final%20project-orange">
 </p>
 
 | | |
@@ -19,14 +18,6 @@ serving a million customers in real time, without putting the ledger at risk.
 | **Challenge** | Millisecond latency, five-nines availability and GDPR erasure, on top of an unchangeable COBOL core that charges for every operation |
 | **Constraints** | 12 months to MVP · 60 developers, only 5 of them COBOL · one regulatory region · minimise operating cost |
 | **Outcome** | A read/write-split hybrid architecture that removes 93% of the mainframe operations the digital channel would otherwise consume: 290M a month down to 20M at Year-3 volume |
-
-**About this project.** It is the final project of the Global Dev Experts *Software Architect*
-programme, written against a fixed brief. The brief supplied the business context, the
-requirements and the constraints; the architecture, the decision record, the sizing, the cost
-model and the delivery plan are mine. Where the brief is ambiguous the design says so rather than
-choosing quietly — those readings are recorded as assumptions in §4 and raised as open issues in
-§8, addressed to a business sponsor in the document's own terms and to the course instructor in
-practice.
 
 ## The problem
 
@@ -125,7 +116,6 @@ Diagram export for the Word deliverable is described in
 
 ---
 
-<sub>Produced for the Global Dev Experts *Software Architect* programme. The brief is theirs;
-the design is mine. This repository contains only original work — the copyrighted course slides,
-recordings and summaries are deliberately excluded, and the study notes under
-<a href="docs/learn/">docs/learn</a> are my own summaries rather than course material.</sub>
+<sub>Developed as the final project for the Global Dev Experts *Software Architect* programme,
+based on the provided NeoBank brief. Copyrighted course material is excluded from this
+repository.</sub>

@@ -1265,7 +1265,7 @@ keeping the on-premises footprint to genuinely regulated workloads and nothing m
 | **Modelled cost at $5 / $25 per million tokens** | **$996** | **$9,960** |
 
 The rate used is the published first-party reference rate for a frontier-class model as of
-mid-2026. Inference will in practice be bought through a managed cloud marketplace, which
+mid-2026. Inference will be bought through a managed cloud marketplace, which
 publishes its own separate rate card; that must replace this figure before budget sign-off
 ([OI-06](#8-open-issues)).
 
@@ -1408,7 +1408,7 @@ names how it would be validated.
 | A-16 | 10% of users consult the AI advisor monthly, twice each | Conservative engagement estimate for a new feature | Advisor cost scales linearly (§3.9); it is the most volatile line in the model |
 | A-17 | SQL Server supports native log-based change data capture in this installation | Standard product capability | Fall back to a scheduled delta extract, as for ADABAS; freshness degrades from seconds to minutes |
 | A-18 | The SQL Server estate holds **non-ledger** operational or reference data, not authoritative money data | The brief shows it as a source system but does not state its contents. Money is stated to live in DB2 | If it holds authoritative money data it becomes a system of record under P1 and joins the write path. Ingestion is unaffected either way (§3.5.2). Confirm in [OI-10](#8-open-issues) |
-| A-19 | "Only this service can run on the cloud and not on-prem" (brief, AI agent) means the AI advisor is **cloud-only**, not that it is the sole permitted cloud service | The same slide states both environments run new digital services, and the cloud environment hosts the API gateway for the app and website | Under the alternative reading every cloud service except the advisor would have to move on-premises, removing the elasticity the design depends on. Confirm with the business sponsor — the course instructor for this exercise ([OI-11](#8-open-issues)) |
+| A-19 | "Only this service can run on the cloud and not on-prem" (brief, AI agent) means the AI advisor is **cloud-only**, not that it is the sole permitted cloud service | The same slide states both environments run new digital services, and the cloud environment hosts the API gateway for the app and website | Under the alternative reading every cloud service except the advisor would have to move on-premises, removing the elasticity the design depends on. Confirm with the business sponsor ([OI-11](#8-open-issues)) |
 
 ---
 
