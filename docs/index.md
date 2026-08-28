@@ -36,8 +36,8 @@ over a replayable event log. Reads never touch the mainframe.
   views, data architecture, network topology, six flow sequences, the transfer state machine and
   the scaling view.
 
-Supporting study notes on the architectural patterns applied here begin at
-[Week 1 — Foundations](learn/week-01.md).
+Supporting study notes run from [Week 1 — Foundations](learn/week-01.md) through
+[Week 14 — Machine learning](learn/week-14.md), covering the patterns applied in this design.
 
 ## Where to start
 

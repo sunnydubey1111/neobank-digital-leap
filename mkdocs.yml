@@ -42,3 +42,12 @@ nav:
       - Architecture patterns II: learn/week-03.md
       - Storage architecture: learn/week-04.md
       - Network architecture: learn/week-05.md
+      - Data streaming: learn/week-06.md
+      - Databases and persistence: learn/week-07.md
+      - Big data architecture: learn/week-08.md
+      - Security architecture: learn/week-09.md
+      - DevOps architecture: learn/week-10.md
+      - Cloud, SaaS and web: learn/week-11.md
+      - Performance and scalability: learn/week-12.md
+      - Observability: learn/week-13.md
+      - Machine learning: learn/week-14.md
