@@ -1,6 +1,5 @@
 # Week 01 — Foundations of software architecture
 
-**Date:** 2026-05-27 · **Session:** Lesson 1 (Intro I)
 
 ## Key concepts (my study notes)
 - **Architecture** = the most important components, their relations & interactions — driven by

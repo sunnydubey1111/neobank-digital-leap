@@ -1,6 +1,5 @@
 # Week 02 — Architecture patterns I
 
-**Date:** 2026-06-03 · **Session:** Lesson 2 (Patterns I)
 
 ## Key concepts (my study notes)
 - **Layered / N-tier:** Presentation → Application → Business → Data (separation of concerns).

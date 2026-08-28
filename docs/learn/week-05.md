@@ -1,6 +1,5 @@
 # Week 05 — Network architecture
 
-**Date:** 2026-06-24 · **Session:** Lesson 5 (Network)
 
 ## Key concepts (my study notes)
 - **Public vs. private cloud.** **VPC** = isolated private cloud; isolation via **subnets /

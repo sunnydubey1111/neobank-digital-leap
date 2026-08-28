@@ -4,10 +4,10 @@
  *   node tools/normalise-metadata.mjs
  *
  * Word stamps the signed-in account identifier into "last modified by" when it
- * saves. That is the author's own account, but an email address does not belong
- * in a document being sent to someone else, so it is replaced with the author's
- * name. Nothing else about the provenance is altered: the creator, the revision
- * count and both timestamps are left exactly as Word wrote them.
+ * saves. The document properties should carry a name rather than an account
+ * identifier, so that field is normalised to the author's name. Nothing else is
+ * altered: the creator, the revision count and both timestamps are left exactly
+ * as Word wrote them.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";

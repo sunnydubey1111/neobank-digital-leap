@@ -1,6 +1,5 @@
 # Week 04 — Storage architecture
 
-**Date:** 2026-06-17 · **Session:** Lesson 4 (Storage)
 
 ## Key concepts (my study notes)
 - **DAS / NAS / SAN** (server-attached → appliance → network of devices as one).

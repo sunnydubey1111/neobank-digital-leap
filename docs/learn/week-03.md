@@ -1,6 +1,5 @@
 # Week 03 — Architecture patterns II (resilience & CQRS)
 
-**Date:** 2026-06-10 · **Session:** Lesson 3 (Patterns II)
 
 ## Key concepts (my study notes)
 - **Retry** (transient failures: cancel / immediate / after-delay).
