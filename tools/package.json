@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Builds the single-file submission document from the design sources.",
   "scripts": {
-    "build": "node build-submission.mjs"
+    "build": "node build-docx.mjs"
   },
   "dependencies": {
     "@mermaid-js/mermaid-cli": "^11.4.0",

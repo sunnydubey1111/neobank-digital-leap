@@ -3,20 +3,17 @@
 The design is authored as Markdown with Mermaid diagrams. The submission is a **single Word
 file with the diagrams embedded**. This directory holds the build that turns one into the other.
 
-## Two commands
+## One command
 
 ```bash
-cd tools && npm install                  # first time only
-cd .. && node tools/build-submission.mjs # renders diagrams, builds the document
-powershell -ExecutionPolicy Bypass -File tools/to-docx.ps1
+cd tools && npm install       # first time only
+cd .. && node tools/build-docx.mjs
 ```
 
 Output: `build/NeoBank-HLD-Sunny-Dubey.docx` — the file to submit.
 
-The second step drives Microsoft Word through COM to perform the conversion, so the result is
-byte-for-byte what opening the file and choosing **Save As → Word Document** would produce.
-Word must be installed; if it is not, open `build/NeoBank-HLD-Sunny-Dubey.doc` manually and use
-Save As instead. Either way the output is one self-contained file with every diagram embedded.
+The build writes the Office Open XML package directly. Word is not involved, so the result does
+not depend on a Word installation and cannot pick up anything from the machine that produced it.
 
 ## What the build does
 
@@ -24,13 +21,16 @@ Save As instead. Either way the output is one self-contained file with every dia
    [`decisions.md`](../docs/solution/decisions.md) and
    [`diagrams.md`](../docs/solution/diagrams.md).
 2. Renders each block to PNG at 2× scale on a white background, via `mermaid-cli`.
-3. Embeds each PNG as a base64 data URI, so the output has no external file dependencies.
+3. Embeds each PNG as a package part, scaled to the text width.
 4. Concatenates the three documents into one: the High Level Design, then Appendix A (the
    Decision Log), then Appendix B (the full diagram set).
-5. Rewrites the cross-document links into intra-document anchors, so every reference still
-   resolves inside the single file.
-6. Wraps it in Word-compatible HTML with print styling — A4, Calibri, banded tables, page breaks
-   before top-level headings.
+5. Gives every heading a bookmark and turns each cross-reference into a bookmark link, so a
+   reference cannot resolve to anything outside the file.
+6. Applies the page setup and styling — A4, 2 cm margins, Calibri, banded tables, a page break
+   before each top-level heading.
+
+A link that is neither an in-document anchor nor a public URL fails the build. That is deliberate:
+such a link would otherwise become an absolute path to the build machine.
 
 Intermediate `.mmd` sources and rendered `.png` files are left in `build/diagrams/` so
 individual diagrams can be pulled out and used on their own.
@@ -46,16 +46,16 @@ For an interactive preview while editing, paste the block into <https://mermaid.
 ## Keeping diagrams legible in print
 
 At A4 with 2 cm margins the usable width is about 17 cm. A diagram wider than roughly 3.5 : 1
-ends up with text too small to read once scaled to that width. The build prints the pixel
-dimensions of each render; anything approaching that ratio should be split rather than shrunk.
-This is why the container diagram is drawn as two views (§2.1 cloud, §2.2 on-premises) instead
-of one — the combined version was legible on screen and unreadable on paper.
+ends up with text too small to read once scaled to that width. Anything approaching that ratio
+should be split rather than shrunk. This is why the container diagram is drawn as two views
+(§3.1 cloud, §3.2 on-premises) instead of one — the combined version was legible on screen and
+unreadable on paper.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---------|-------|
 | `Parse error on line N` | A `;` in a node or message label — Mermaid reads it as a statement separator. Use a comma |
-| A diagram renders as `[diagram … did not render]` | The build continues past failures. The error line is printed above it |
+| `… link(s) resolve outside the document` | A Markdown link points at a file rather than a heading or a URL |
+| `[diagram … did not render]` in the output | The build continues past failures. The error line is printed above it |
 | `mmdc` not found | `npm install` has not been run in `tools/` |
-| Word opens the file as plain text | Confirm the extension is `.doc`, not `.txt` |
