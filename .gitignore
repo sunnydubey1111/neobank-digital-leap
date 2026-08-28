@@ -50,3 +50,32 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# ───────────────────────────────────────────────────────────────
+# Secrets and credentials — never commit.
+# Nothing here belongs in the repository at any point.
+# ───────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.ppk
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.ssh/
+.aws/
+.npmrc
+.netrc
+credentials
+credentials.json
+secrets.json
+service-account*.json
+*.tfvars
+!*.tfvars.example
