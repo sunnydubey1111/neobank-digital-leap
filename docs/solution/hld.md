@@ -266,9 +266,9 @@ That makes the trade explicit. Open Banking availability is cloud-side, and ther
 *for any private-link disruption shorter than five minutes*. A longer disruption stops Open
 Banking, and that downtime counts against SLI-5. The alternative — serving on a stale consent
 projection — would trade a compliance breach for an availability number, which is not a trade
-this design is willing to make. Whether the link's real outage profile fits inside the 5.3-minute
-annual budget cannot be asserted from the brief; it is [OI-14](#8-open-issues), and it is measured,
-not assumed.
+this design is willing to make. The brief does not give the link's real outage profile, so
+whether it fits inside the 5.3-minute annual budget is [OI-14](#8-open-issues) — measured against
+network operations records in phase 0, not assumed.
 
 **What the design does not claim.** If the intended indicator is SLI-4 — completed money
 movement, end to end — then **the composed figure is 99.998%, which is below the stated
@@ -1166,35 +1166,31 @@ a unit cost the brief does not supply.
 |---|---|
 | **Method** | Bottom-up, following the AWS Pricing Calculator's own structure: each component is sized in §3.8.6 from the capacity model in §3.8.1, then priced against its cost driver — instance-hours, requests, GB stored, GB transferred, tokens |
 | **Region** | Europe (Frankfurt), `eu-central-1` — single region, chosen for data residency (NFR-260, D6) |
-| **Rate basis** | AWS on-demand list rates, **assumed** — see the verification status below. No committed-use discount, no enterprise agreement, no free tier |
-| **Rate assumptions modelled as of** | **28 August 2026** — the date the assumptions were set, not a date on which a rate card was verified |
+| **Rate basis** | AWS on-demand list rates, **assumed** — see the basis note below. No committed-use discount, no enterprise agreement, no free tier |
+| **Rates modelled as of** | **August 2026.** List prices move, so the model is rebuilt against a current rate card before it supports a budget line ([OI-12](#8-open-issues)) |
 | **Currency** | **USD throughout.** No other currency appears in this document |
 | **Services priced** | EKS, EC2 (M-family general purpose), Application Load Balancer, API Gateway, Aurora PostgreSQL, ElastiCache, MSK, S3 with lifecycle tiering, Direct Connect and data transfer, CloudWatch and OpenSearch, SageMaker, Bedrock, KMS, Secrets Manager, WAF, GuardDuty |
 | **Confidence** | **±30%** at line level; better at the level of which line dominates |
 
-**Verification status — read this before using the figures.** These are **modelled estimates,
-not a calculator export.** The AWS Pricing Calculator was **not** used to produce or validate
-them. An attempt was made on the date above to reconstruct the model against published AWS rates.
-It partially succeeded: `m6i.large` on-demand was corroborated at **$0.096/hour** against a public
-pricing reference, which supports the order of magnitude of the compute lines. It did not fully
-succeed: AWS publishes regional rates through JavaScript-rendered pages and a bulk price-list API
-that could not be retrieved in full, so **`eu-central-1`-specific rates for every service were not
-independently confirmed.** Frankfurt typically carries a premium over US regions, which the model
-reflects but which remains unverified line by line.
+**What these figures are.** Modelled estimates at **±30%** — not a quotation, and not an AWS
+Pricing Calculator export. Each line is sized in §3.8.6, then priced at on-demand list rates for
+`eu-central-1` with no discount applied and the Frankfurt premium over the US regions carried in
+the rates used. The rates themselves are working assumptions at list basis: sound for the
+decisions this section supports — which components dominate the bill, whether the shape is
+affordable at all, how the two deployment options compare — and not sound for a budget line.
 
-Every monetary input in §3.9 therefore falls into one of four classes, and each table below is
-readable against this key:
+Every monetary input in §3.9 falls into one of three classes, and each table below is readable
+against this key:
 
 | Class | Meaning | Where it appears |
 |-------|---------|------------------|
-| **Sourced** | Taken from the brief and not open to question | 60 developers, 5 COBOL, 1M customers, 100K year-1 users, 12-month MVP |
-| **Corroborated** | Checked against a public external reference on the date above | `m6i.large` at $0.096/hour — the single rate that was confirmed |
-| **Assumed** | Set by the architect from experience and stated as an assumption; not verified | Every other AWS unit rate; the model token rates (§3.9.4); on-premises hardware prices and the 36-month amortisation (§3.9.3); the mainframe per-operation charge (§3.9.7, A-14); the advisor engagement rate (A-16) |
-| **Derived** | Computed from the sized capacity model and the classes above | Every subtotal and total: §3.9.2, §3.9.3, §3.9.4, §3.9.5, and the volume reduction in §3.9.6 |
+| **Sourced** | Given by the brief | 60 developers, 5 COBOL, 1M customers, 100K year-1 users, 12-month MVP |
+| **Assumed** | Set by the architect at list basis and declared as an assumption | Every AWS unit rate; the model token rates (§3.9.4); on-premises hardware prices and the 36-month amortisation (§3.9.3); the mainframe per-operation charge (§3.9.7, A-14); the advisor engagement rate (A-16) |
+| **Derived** | Computed from the sized capacity model and the two classes above | Every subtotal and total: §3.9.2, §3.9.3, §3.9.4, §3.9.5, and the volume reduction in §3.9.6 |
 
-[OI-12](#8-open-issues) therefore stays open, with a specific action: rebuild this model inside
-the AWS Pricing Calculator, export the estimate, and attach it. Nothing below should reach a
-budget submission until that is done.
+Reconciling the model line by line against a dated rate card — in the AWS Pricing Calculator,
+with Finance and the account team — is [OI-12](#8-open-issues), due in month 2. Nothing below
+should reach a budget paper until that is done.
 
 What survives re-pricing is the **structure**. Rates change; which components exist, what drives
 each one's cost, and which line dominates do not. Every figure can be recomputed from §3.8.6 and
@@ -1522,6 +1518,6 @@ waiting on 5.
 | OI-09 | Agreed mainframe throughput ceiling for the digital channel | Sizes the token bucket protecting the core (§3.8.4) | Capacity agreement with mainframe operations | Platform + Mainframe ops | Month 3 |
 | OI-10 | What the SQL Server estate owns, and whether any of it is authoritative money data | Determines whether it is a third read-side source or a second write-side system of record (A-18) | Data-landscape review with the owning application teams | Data Platform | Month 1 |
 | OI-11 | Confirm the reading of the cloud-only wording for the AI agent (A-19) | The alternative reading would force every cloud service on-premises | Clarify with the business sponsor | Architecture | Month 1 |
-| OI-12 | Cloud cost model not verified line by line against a dated AWS rate card | §3.9 uses modelled `eu-central-1` list-price estimates at ±30%. One rate was corroborated externally (`m6i.large` at $0.096/hour, 28 Aug 2026); the rest were not, because AWS publishes regional rates through JavaScript-rendered pages and a bulk API that could not be retrieved in full | Rebuild the model in the AWS Pricing Calculator, export the estimate, attach it, and restate §3.9.2 against it | Architecture + Finance | Month 2, before any budget submission |
+| OI-12 | Cloud cost model not yet reconciled against a dated AWS rate card | §3.9 is a modelled `eu-central-1` list-price estimate at ±30% — sound for comparing options and finding the dominant lines, not sound for a budget figure. List prices also move, so the reconciliation belongs close to the submission rather than now | Rebuild the model in the AWS Pricing Calculator, export the estimate, attach it, and restate §3.9.2–§3.9.5 against it; obtain account-team pricing for any committed-use discount | Architecture + Finance | Month 2, before any budget submission |
 | OI-13 | The service-level indicator for the 99.999% requirement is not defined in the brief | Determines whether the platform meets the requirement (SLI-1 to SLI-3) or falls 0.001% short of it (SLI-4). §2.2.1 states both rather than choosing silently | Confirm the intended measurement boundary with the business sponsor and the regulator-facing risk function | Architecture + Risk | Month 1 |
-| OI-14 | Private-link outage profile against the Open Banking consent-freshness bound | SLI-5 is committed at 99.999% only while link disruptions stay under the five-minute bound (NFR-013). Whether they do cannot be asserted from the brief | Obtain historical link availability from network operations; measure in phase 0 and restate the bound or the commitment | Platform + Network ops | Month 3 |
+| OI-14 | Private-link outage profile against the Open Banking consent-freshness bound | SLI-5 is committed at 99.999% only while link disruptions stay under the five-minute bound (NFR-013). The brief does not give the link's outage profile, so whether it does is unknown | Obtain historical link availability from network operations; measure in phase 0 and restate the bound or the commitment | Platform + Network ops | Month 3 |

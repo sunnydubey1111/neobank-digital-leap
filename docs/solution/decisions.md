@@ -397,10 +397,10 @@ separately because consent verification gives it a dependency the customer read 
 have: it is served from a cloud consent projection and fails closed once that projection's
 freshness bound expires (NFR-013, NFR-014, [OI-14](hld.md#8-open-issues)).
 
-Open Banking was originally folded into SLI-2. That was wrong — it understated the dependency
-set, and an indicator that hides a dependency is worse than no indicator, because it will be
-believed. Separating it costs a line in the reporting pack and buys an availability model that
-matches the real dependency graph.
+Folding Open Banking into SLI-2 is the tempting simplification — both are read paths, both are
+served from the cloud. It understates the dependency set, and an indicator that hides a
+dependency is worse than no indicator, because it will be believed. Separating it costs a line in
+the reporting pack and buys an availability model that matches the real dependency graph.
 
 Each is measured and reported separately (NFR-025). No blended figure is published, because a
 blended figure would let core downtime hide inside a platform number.
