@@ -2,7 +2,7 @@
 
 | Revision | Date | Author | Details |
 |----------|------|--------|---------|
-| 1.0 | 2026-08-28 | Sunny Dubey — sjkumardube@gmail.com | First issue. Requirements, assumptions and constraints; architecture, flows, contracts, data and security design; sizing, operational cost model and delivery estimate; decision log and diagram set |
+| 1.0 | 2026-08-28 | Sunny Dubey | First issue. Requirements, assumptions and constraints; architecture, flows, contracts, data and security design; sizing, operational cost model and delivery estimate; decision log and diagram set |
 
 ## Abstract
 
